@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>一起養倉鼠</title>
+  <meta name="theme-color" content="#ffe9ef" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="養倉鼠" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="app" class="hidden">
+    <canvas id="scene"></canvas>
+
+    <header id="hud">
+      <div class="title-row">
+        <div>
+          <h1 id="dogName">布丁</h1>
+          <div id="daysTogether" class="sub">在一起第 1 天</div>
+        </div>
+        <button id="btnSettings" class="icon-btn" aria-label="設定">⚙️</button>
+      </div>
+      <div class="stats">
+        <div class="stat"><span>🌻 飽足</span><div class="bar"><i id="barFull"></i></div></div>
+        <div class="stat"><span>💗 心情</span><div class="bar"><i id="barJoy"></i></div></div>
+      </div>
+      <div class="level">
+        <span id="levelText">Lv.1 小鼠寶寶</span>
+        <div class="bar small"><i id="barLove"></i></div>
+      </div>
+    </header>
+
+    <div id="banner" class="hidden"></div>
+    <div id="bubble" class="bubble hidden"></div>
+    <div id="careHint" class="care-hint"></div>
+
+    <nav id="actions">
+      <button data-act="feed"><b>🌻</b><span>餵食</span></button>
+      <button data-act="wheel"><b>🎡</b><span>滾輪</span></button>
+      <button data-act="sleep"><b>💤</b><span>哄睡</span></button>
+      <button data-act="note"><b>💌</b><span>傳話</span></button>
+      <button data-act="log"><b>📒</b><span>紀錄</span></button>
+    </nav>
+    <div id="toasts"></div>
+    <div id="fx"></div>
+  </div>
+
+  <!-- 第一次使用 -->
+  <section id="setup" class="screen hidden">
+    <div class="setup-card">
+      <div class="logo">🐹</div>
+      <h2>一起養倉鼠</h2>
+      <p class="muted">兩個人一起照顧一隻小倉鼠</p>
+      <div class="tabs">
+        <button class="tab active" data-tab="create">建立新家</button>
+        <button class="tab" data-tab="join">加入另一半的家</button>
+      </div>
+      <form id="createForm" class="form">
+        <label>你的暱稱<input name="myName" maxlength="12" required placeholder="例如：阿明" /></label>
+        <label>倉鼠的名字<input name="dogName" maxlength="12" required value="布丁" /></label>
+        <label>你們的紀念日（也是倉鼠生日）<input name="anniversary" type="date" required /></label>
+        <button class="primary" type="submit">領養倉鼠 🐹</button>
+      </form>
+      <form id="joinForm" class="form hidden">
+        <label>你的暱稱<input name="myName" maxlength="12" required placeholder="例如：小美" /></label>
+        <label>家庭碼<input name="code" maxlength="6" required placeholder="另一半給你的 6 碼" autocapitalize="characters" autocomplete="off" /></label>
+        <button class="primary" type="submit">回家 🏠</button>
+      </form>
+      <p id="setupError" class="error"></p>
+      <p id="modeNote" class="mode-note"></p>
+    </div>
+  </section>
+
+  <!-- 對話框 -->
+  <div id="sheet" class="sheet-backdrop hidden">
+    <div class="sheet">
+      <button class="sheet-close" aria-label="關閉">✕</button>
+      <div id="sheetBody"></div>
+    </div>
+  </div>
+
+  <div id="loading" class="screen"><div class="logo bounce">🐹</div></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
