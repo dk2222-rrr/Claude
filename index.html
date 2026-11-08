@@ -27,7 +27,10 @@
           <h1 id="dogName">布丁</h1>
           <div id="daysTogether" class="sub">在一起第 1 天</div>
         </div>
-        <button id="btnSettings" class="icon-btn" aria-label="設定">⚙️</button>
+        <div class="hud-btns">
+          <button id="btnLog" class="icon-btn" aria-label="紀錄">📒</button>
+          <button id="btnSettings" class="icon-btn" aria-label="設定">⚙️</button>
+        </div>
       </div>
       <div class="stats">
         <div class="stat"><span>🌻 飽足</span><div class="bar"><i id="barFull"></i></div></div>
@@ -42,13 +45,14 @@
     <div id="banner" class="hidden"></div>
     <div id="bubble" class="bubble hidden"></div>
     <div id="careHint" class="care-hint"></div>
+    <button id="btnCam" class="cam-btn">🔍 看全景</button>
 
     <nav id="actions">
       <button data-act="feed"><b>🌻</b><span>餵食</span></button>
       <button data-act="wheel"><b>🎡</b><span>滾輪</span></button>
+      <button data-act="bath"><b>🛁</b><span>洗澡</span></button>
       <button data-act="sleep"><b>💤</b><span>哄睡</span></button>
       <button data-act="note"><b>💌</b><span>傳話</span></button>
-      <button data-act="log"><b>📒</b><span>紀錄</span></button>
     </nav>
     <div id="toasts"></div>
     <div id="fx"></div>

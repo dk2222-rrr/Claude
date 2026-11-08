@@ -150,6 +150,7 @@ function onEvents(list) {
     if (e.by === me() || Date.now() - e.at > 60000) return;
     if (e.type === 'feed') { toast(`🌻 ${e.byName} 餵了${petName()}`); if (!world.userBusy) world.feed(); }
     if (e.type === 'wheel') { toast(`🎡 ${e.byName} 叫${petName()}去跑滾輪`); if (!world.userBusy) world.runWheel(); }
+    if (e.type === 'bath') { toast(`🛁 ${e.byName} 幫${petName()}洗沙浴`); if (!world.userBusy) world.bath(); }
     if (e.type === 'sleep') { toast(`💤 ${e.byName} 哄${petName()}睡覺了`); if (!world.userBusy) world.putToSleep(); }
     if (e.type === 'note') { toast(`💌 ${e.byName} 透過${petName()}傳話給你`); world.happyHop(); }
   });
@@ -191,7 +192,7 @@ function setBar(sel, v) {
 function todayTally() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const t = {};
-  Object.keys(room.members).forEach((id) => (t[id] = { feed: 0, wheel: 0, pet: 0, note: 0, sleep: 0, total: 0 }));
+  Object.keys(room.members).forEach((id) => (t[id] = { feed: 0, wheel: 0, bath: 0, pet: 0, note: 0, sleep: 0, total: 0 }));
   events.filter((e) => e.at >= start.getTime()).forEach((e) => {
     const x = t[e.by];
     if (!x) return;
@@ -336,6 +337,7 @@ async function onAction(act) {
   }
   if (act === 'feed') { say('瓜子！瓜子！🌻', 1.5); world.feed().then(() => !world.sleeping && say('塞滿頰囊了！謝謝 💕', 2.5)); }
   if (act === 'wheel') { say('衝呀～！', 1.5); world.runWheel(); }
+  if (act === 'bath') { say('沙浴時間！', 1.5); world.bath().then(() => !world.sleeping && say('洗得香香的 ✨', 2.5)); }
   if (act === 'sleep') { say('呼啊…想睡了', 2); world.putToSleep(); }
 }
 
@@ -373,6 +375,7 @@ const EV_TEXT = {
   feed: (e) => `🌻 ${e.byName} 餵了瓜子`,
   wheel: (e) => `🎡 ${e.byName} 叫牠跑滾輪`,
   sleep: (e) => `💤 ${e.byName} 哄睡覺`,
+  bath: (e) => `🛁 ${e.byName} 幫牠洗沙浴`,
   pet: (e) => `✋ ${e.byName} 摸摸`,
   note: (e) => `💌 ${e.byName}：「${e.text}」`,
   together: (e) => `💞 ${e.with} 和 ${e.byName} 一起摸摸`,
@@ -390,7 +393,7 @@ function openLog() {
   const tallyHtml = Object.entries(room.members).map(([id, m]) => {
     const x = t[id] || {};
     return `<div><div class="who">${esc(m.name)}${id === me() ? '（你）' : ''}</div>
-      <div class="nums">🌻 餵食 ${x.feed || 0}　🎡 滾輪 ${x.wheel || 0}<br>✋ 摸摸 ${x.pet || 0}　💤 哄睡 ${x.sleep || 0}　💌 ${x.note || 0}</div></div>`;
+      <div class="nums">🌻 餵食 ${x.feed || 0}　🎡 滾輪 ${x.wheel || 0}<br>🛁 洗澡 ${x.bath || 0}　💤 哄睡 ${x.sleep || 0}<br>✋ 摸摸 ${x.pet || 0}　💌 傳話 ${x.note || 0}</div></div>`;
   }).join('');
   const items = events.slice(0, 60).map((e) => `<li><time>${fmtTime(e.at)}</time><span>${esc((EV_TEXT[e.type] || (() => e.type))(e))}</span></li>`).join('');
   openSheet(`
@@ -442,6 +445,11 @@ function openSettings(welcome = false) {
   });
 }
 $('#btnSettings').addEventListener('click', () => room && openSettings());
+$('#btnLog').addEventListener('click', () => room && openLog());
+$('#btnCam').addEventListener('click', () => {
+  const m = world.toggleCamera();
+  $('#btnCam').textContent = m === 'follow' ? '🔍 看全景' : '🐹 跟著牠';
+});
 
 /* ---------------- 小工具 ---------------- */
 function toast(text) {

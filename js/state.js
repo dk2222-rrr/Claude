@@ -90,6 +90,11 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       d.love += 2;
       return { room: r, event: ev('wheel'), result: { ok: true } };
 
+    case 'bath':
+      d.joy = clamp(d.joy + 10);
+      d.love += 2;
+      return { room: r, event: ev('bath'), result: { ok: true } };
+
     case 'sleep':
       d.joy = clamp(d.joy + 3);
       return { room: r, event: ev('sleep'), result: { ok: true } };

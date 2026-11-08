@@ -1,5 +1,5 @@
 // 簡單的離線快取：先抓網路，失敗才用快取
-const CACHE = 'pup-v2';
+const CACHE = 'pup-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'js/main.js', 'js/world.js', 'js/hamster.js', 'js/state.js', 'js/sync.js', 'js/config.js', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
