@@ -6,8 +6,8 @@ export const BOWL = { x: 0.85, z: 0.62, r: 0.17 };
 export const DRINK = { x: -1.46, z: 0.62 };
 export const PLAT = { x0: 0.15, x1: 1.8, z0: -1.1, z1: -0.1, y: 0.95 };
 export const RAMP = { x: 1.52, w: 0.38, zTop: -0.1, zBot: 0.95 };
-export const HOUSE = { x: 0.62, z: -0.82, w: 0.62, d: 0.46 };
-export const NEST = { x: 1.12, z: -0.56, r: 0.25 };
+export const HOUSE = { x: 0.55, z: -0.82, w: 0.62, d: 0.46 };
+export const NEST = { x: 1.2, z: -0.6, r: 0.34 };
 export const LOG = { x: 0.75, z: -0.7, r: 0.25, inner: 0.215, len: 0.74 };
 
 // 走路時要繞開的東西（圓形近似）

@@ -1,5 +1,6 @@
 // 3D 小倉鼠：卡通手繪風（描邊＋色階光影）。動作由 sim.js 算出的姿勢驅動。
 import * as THREE from 'three';
+import { NEST } from './layout.js';
 
 export const PALETTES = {
   golden: { label: '黃金鼠', fur: 0xe0a668, cream: 0xfcefd9, earIn: 0x8a7470, paw: 0xf6b7b0 },
@@ -291,9 +292,11 @@ export class Hamster {
       drinking: kind === 'drink',
       sniffing: kind === 'sniff' || kind === 'peek' || kind === 'stand',
       tall: kind === 'stand',
-      loaf: kind === 'loaf' || kind === 'hide' || kind === 'peek' || kind === 'dig' || kind === 'poop' || p.mode === 'creep',
+      loaf: kind === 'loaf' || kind === 'hide' || kind === 'peek' || kind === 'dig' || kind === 'burrow' || kind === 'poop' || p.mode === 'creep',
       pooping: kind === 'poop',
-      dig: kind === 'dig',
+      dig: kind === 'dig' || kind === 'burrow',
+      burrow: kind === 'burrow',
+      inNest: p.level === 2 && Math.hypot(p.pos.x - NEST.x, p.pos.z - NEST.z) < NEST.r + 0.05,
       sleeping: kind === 'sleep' || kind === 'nap',
       bathing: kind === 'bath',
       running: kind === 'wheelRun',
@@ -312,7 +315,7 @@ export class Hamster {
     this.hop = hop;
     if (wantHeading != null) {
       if (f.happy) this.heading = this.heading + angleDiff(this.heading, wantHeading) * Math.min(1, dt * 20);
-      else this.heading += angleDiff(this.heading, wantHeading) * Math.min(1, dt * 10);
+      else this.heading += angleDiff(this.heading, wantHeading) * Math.min(1, dt * (f.moving ? 6 : 3.5));
     }
     this.slope = damp(this.slope, p.slope || 0, 10, dt);
     if (kind === 'eat' && p.foodKind === 'kibble') this.cheekTarget = Math.min(1, p.k * 1.3);
@@ -325,14 +328,15 @@ export class Hamster {
     const f = this.f;
     const petting = (this.petT || 0) > 0;
     if (petting) this.petT -= dt;
-    this.sleepK = damp(this.sleepK, f.sleeping ? 1 : 0, 3, dt);
+    this.sleepK = damp(this.sleepK, f.sleeping ? 1 : 0, 1.5, dt);
+    this.nestK = damp(this.nestK || 0, f.inNest && (f.sleeping || f.burrow) ? 1 : 0, 1.5, dt);
     this.bathK = damp(this.bathK, f.bathing ? 1 : 0, 6, dt);
     this.runK = damp(this.runK, f.running ? 1 : 0, 5, dt);
     const sk = this.sleepK;
 
     const moving = f.moving || this.runK > 0.1 || f.dig;
     const wantQuad = moving || f.climbing || f.sleeping || f.bathing || f.loaf || f.jumping;
-    this.quadK = damp(this.quadK, wantQuad ? 1 : 0, moving ? 14 : 7, dt);
+    this.quadK = damp(this.quadK, wantQuad ? 1 : 0, moving ? 7 : 3.5, dt);
     const q = this.quadK;
 
     const stepSpeed = this.runK > 0.1 ? 3 * this.runK : f.dig ? 1.6 : f.speed || 0;
@@ -341,7 +345,8 @@ export class Hamster {
     const sw = Math.sin(this.walkPhase);
 
     const breathe = Math.sin(t * (sk > 0.5 ? 1.5 : 3.2)) * (0.012 + sk * 0.02);
-    this.root.position.set(this.pos.x, this.pos.y + (this.hop || 0), this.pos.z);
+    // 睡在窩裡時陷進棉花一點
+    this.root.position.set(this.pos.x, this.pos.y + (this.hop || 0) - this.nestK * 0.05, this.pos.z);
     this.root.rotation.y = this.heading;
     this.rollG.rotation.x = -this.slope;
     const roll = this.bathK * Math.sin(t * 3.6) * 1.25;
@@ -369,18 +374,18 @@ export class Hamster {
     pitch = lerp(pitch, 0.55, sk);
     pitch += (this.squeezeK || 0) * 0.45;
     let yaw = 0;
-    if (f.sniffing) yaw = Math.sin(t * 2.2) * 0.6;
+    if (f.sniffing) yaw = Math.sin(t * 0.9) * 0.45 + Math.sin(t * 0.37 + 1) * 0.25;
     else if (this.look && !moving && !f.nibble && sk < 0.1 && this.bathK < 0.1) {
       const lp = this.root.worldToLocal(this._v.copy(this.look));
       yaw = Math.max(-0.7, Math.min(0.7, Math.atan2(lp.x, Math.max(0.3, lp.z))));
     }
     const happyTilt = f.happy || petting ? Math.sin(t * 8) * 0.15 : 0;
-    this.headPivot.rotation.x = damp(this.headPivot.rotation.x, -theta * 0.92 + pitch, 9, dt);
-    this.headPivot.rotation.y = damp(this.headPivot.rotation.y, yaw, 6, dt);
+    this.headPivot.rotation.x = damp(this.headPivot.rotation.x, -theta * 0.92 + pitch, 5, dt);
+    this.headPivot.rotation.y = damp(this.headPivot.rotation.y, yaw, 2.5, dt);
     this.headPivot.rotation.z = damp(this.headPivot.rotation.z, happyTilt, 5, dt);
 
     // 手：胸前 ↔ 嘴邊 ↔ 地上（挖土時兩手輪流扒）
-    this.handUpK = damp(this.handUpK, f.handsUp ? 1 : 0, 10, dt);
+    this.handUpK = damp(this.handUpK, f.handsUp ? 1 : 0, 5, dt);
     const holdP = new THREE.Vector3();
     this.hands.forEach((hd) => {
       const s = hd.userData.side;

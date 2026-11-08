@@ -68,9 +68,11 @@ export function newRoom({ dogName, anniversary, myName, color }, uid) {
 export const MAX_HAMSTERS = 3;
 // 倉鼠分數：照顧得好會加分，大便放著不撿會扣分（未來可以拿來升級籠子／玩具）
 export const SCORE_START = 100;
-export const POOP_PENALTY_MAX = 10; // 一坨大便最多扣 10 分（每放 1 小時扣 1 分）
-export const poopPenalty = (ageMs) => Math.min(POOP_PENALTY_MAX, Math.floor(Math.max(0, ageMs) / 3600e3));
-export const scoreOf = (room) => (room?.score ?? SCORE_START);
+export const POOP_PENALTY_MAX = 5; // 一坨大便最多扣 5 分
+export const POOP_GRACE = 3 * 3600e3; // 3 小時內撿都不扣分
+// 放超過 3 小時後，每 2 小時扣 1 分
+export const poopPenalty = (ageMs) => Math.min(POOP_PENALTY_MAX, Math.floor(Math.max(0, ageMs - POOP_GRACE) / (2 * 3600e3)) + (ageMs > POOP_GRACE ? 1 : 0));
+export const scoreOf = (room) => Math.max(0, room?.score ?? SCORE_START);
 export const SNACK_COST = { kibble: 0, seed: 1, fish: 2 };
 
 // 舊資料沒有 hamsters 欄位時，用原本的名字補一隻
@@ -163,7 +165,7 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       const done = r.cleaned || [];
       if (done.includes(extra.pid)) return { result: { ok: false, reason: 'already' } };
       const gain = 2 - poopPenalty(extra.ageMs || 0);
-      r.score = scoreOf(r) + gain;
+      r.score = Math.max(0, scoreOf(r) + gain);
       r.cleaned = [...done, extra.pid].slice(-150);
       return { room: r, event: ev('clean', { pid: extra.pid, gain }), result: { ok: true, gain } };
     }
@@ -173,7 +175,7 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       if ((r.settledTo || 0) >= extra.day) return { result: { ok: false } };
       r.settledTo = extra.day;
       if (!extra.count) return { room: r, result: { ok: true } };
-      r.score = scoreOf(r) - extra.count * POOP_PENALTY_MAX;
+      r.score = Math.max(0, scoreOf(r) - extra.count * POOP_PENALTY_MAX);
       return { room: r, event: ev('settle', { count: extra.count }), result: { ok: true } };
     }
 

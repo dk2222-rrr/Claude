@@ -438,25 +438,37 @@ export class World {
     house.position.set(HOUSE.x, y, HOUSE.z);
     s.add(house);
 
-    // 棉花窩＋乾草
+    // 大棉花窩：後面堆得比較高，倉鼠睡覺時會鑽進去
     const nest = new THREE.Group();
-    const puff = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 10), std(0xffffff, { roughness: 1 }), 50);
-    const m = new THREE.Matrix4();
-    for (let i = 0; i < 50; i++) {
-      const a = (i / 50) * Math.PI * 2 + rand(-0.1, 0.1);
-      const rr = rand(NEST.r - 0.03, NEST.r + 0.05);
-      const sz = rand(0.05, 0.085);
-      m.compose(new THREE.Vector3(Math.cos(a) * rr, rand(0.03, 0.07), Math.sin(a) * rr), new THREE.Quaternion(), new THREE.Vector3(sz, sz * 0.75, sz));
-      puff.setMatrixAt(i, m);
+    const cotton = std(0xffffff, { roughness: 1 });
+    const R = NEST.r;
+    const puffs = [];
+    for (let i = 0; i < 80; i++) {
+      const a = (i / 80) * Math.PI * 2 + rand(-0.06, 0.06);
+      const back = Math.max(0, -Math.sin(a)); // 後面（z<0）比較高
+      const rr = rand(R - 0.03, R + 0.07);
+      const sz = rand(0.07, 0.12) + back * 0.03;
+      puffs.push([Math.cos(a) * rr, rand(0.04, 0.1) + back * rand(0.05, 0.12), Math.sin(a) * rr, sz]);
     }
+    for (let i = 0; i < 26; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const rr = Math.sqrt(Math.random()) * (R - 0.08);
+      puffs.push([Math.cos(a) * rr, rand(0.015, 0.04), Math.sin(a) * rr, rand(0.05, 0.08)]);
+    }
+    const puff = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 10), cotton, puffs.length);
+    const m = new THREE.Matrix4();
+    puffs.forEach(([x, py, z, sz], i) => {
+      m.compose(new THREE.Vector3(x, py, z), new THREE.Quaternion(), new THREE.Vector3(sz, sz * 0.72, sz));
+      puff.setMatrixAt(i, m);
+    });
     puff.castShadow = puff.receiveShadow = true;
     nest.add(puff);
-    nest.add(mesh(new THREE.CylinderGeometry(NEST.r + 0.03, NEST.r + 0.03, 0.03, 32), std(0xfff6ef, { roughness: 1 }), 0, 0.015, 0));
-    const hay = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.004, 0.004, 0.16, 4), std(0xe5c66f, { roughness: 0.9 }), 60);
-    for (let i = 0; i < 60; i++) {
+    nest.add(mesh(new THREE.CylinderGeometry(R + 0.03, R + 0.06, 0.035, 40), std(0xfff6ef, { roughness: 1 }), 0, 0.017, 0));
+    const hay = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.004, 0.004, 0.18, 4), std(0xe5c66f, { roughness: 0.9 }), 100);
+    for (let i = 0; i < 100; i++) {
       const a = Math.random() * Math.PI * 2;
-      const rr = rand(0.05, NEST.r + 0.08);
-      m.compose(new THREE.Vector3(Math.cos(a) * rr, rand(0.02, 0.07), Math.sin(a) * rr), new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2 + rand(-0.3, 0.3), 0, Math.random() * 3)), new THREE.Vector3(1, 1, 1));
+      const rr = rand(0.05, R + 0.1);
+      m.compose(new THREE.Vector3(Math.cos(a) * rr, rand(0.02, 0.12), Math.sin(a) * rr), new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2 + rand(-0.4, 0.4), 0, Math.random() * 3)), new THREE.Vector3(1, 1, 1));
       hay.setMatrixAt(i, m);
     }
     nest.add(hay);
@@ -518,7 +530,17 @@ export class World {
       const contact = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.55), this.blobMat);
       contact.rotation.x = -Math.PI / 2;
       this.scene.add(contact);
-      this.rigs[id] = { ham, contact, pose: null };
+      // 睡覺時蓋在身上的棉花（只露出頭）
+      const blanket = new THREE.Group();
+      const bm = std(0xffffff, { roughness: 1 });
+      [[0, 0.2, -0.1, 0.12], [-0.1, 0.16, -0.04, 0.09], [0.1, 0.16, -0.04, 0.09], [0, 0.19, 0.02, 0.1], [-0.07, 0.12, -0.16, 0.08], [0.07, 0.12, -0.16, 0.08], [0, 0.14, -0.2, 0.08]].forEach(([x, by, z, r]) => {
+        const b = mesh(new THREE.SphereGeometry(1, 12, 10), bm, x, by, z);
+        b.scale.set(r, r * 0.75, r);
+        blanket.add(b);
+      });
+      blanket.visible = false;
+      this.scene.add(blanket);
+      this.rigs[id] = { ham, contact, blanket, pose: null };
     }
     return this.rigs[id];
   }
@@ -793,6 +815,14 @@ export class World {
       rig.contact.position.set(rig.ham.pos.x, rig.ham.pos.y + 0.012, rig.ham.pos.z);
       rig.contact.rotation.z = rig.ham.heading;
       if (pose.kind === 'bath' && Math.random() < 0.7) this.emit(rig.ham.pos, 0xe2c99a, 1, 0.07);
+      const cover = rig.ham.nestK * Math.min(1, rig.ham.sleepK * 1.4);
+      rig.blanket.visible = cover > 0.03;
+      if (rig.blanket.visible) {
+        rig.blanket.position.copy(rig.ham.root.position);
+        rig.blanket.rotation.y = rig.ham.heading;
+        rig.blanket.scale.setScalar(cover);
+      }
+      if (pose.kind === 'burrow' && Math.random() < 0.5) this.emit(rig.ham.pos, 0xffffff, 1, PLAT.y + 0.02);
       if (pose.kind === 'dig' && Math.random() < 0.6) {
         const back = this._v.set(-Math.sin(rig.ham.heading), 0.3, -Math.cos(rig.ham.heading));
         this.emit(rig.ham.pos, 0xf1e6d0, 1, 0.01, back.clone());

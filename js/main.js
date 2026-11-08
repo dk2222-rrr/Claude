@@ -162,7 +162,7 @@ function dirtyPoops(now = Date.now()) {
   return sim?.ready ? sim.poopsAt(now).filter((p) => !p.cleanedAt || p.cleanedAt > now) : [];
 }
 function liveScore(now = Date.now()) {
-  return scoreOf(room) - dirtyPoops(now).reduce((s, p) => s + poopPenalty(now - p.appearAt), 0);
+  return Math.max(0, scoreOf(room) - dirtyPoops(now).reduce((s, p) => s + poopPenalty(now - p.appearAt), 0));
 }
 
 function onRoom(r) {
@@ -273,7 +273,7 @@ function todayTally() {
 
 function careHint() {
   const n = dirtyPoops().length;
-  if (n) return `籠子裡有 ${n} 坨大便 💩 點一下就能撿起來（放越久扣越多分）`;
+  if (n) return `籠子裡有 ${n} 坨大便 💩 點一下就能撿起來（超過 3 小時會開始扣分）`;
   const p = partner();
   if (!p) return '把家庭碼傳給另一半，一起養吧 ✨（⚙️ 設定裡）';
   const t = todayTally();
@@ -656,7 +656,7 @@ const EV_TEXT = {
   note: (e) => `💌 ${e.byName}：「${e.text}」`,
   photo: (e) => `📷 ${e.byName} 拍了照片`,
   adopt: (e) => `🐹 ${e.byName} 帶 ${e.name} 回家`,
-  settle: (e) => `😢 有 ${e.count} 坨大便放了 3 天都沒撿，倉鼠分數 -${e.count * 10}`,
+  settle: (e) => `😢 有 ${e.count} 坨大便放了 3 天都沒撿，倉鼠分數 -${e.count * 5}`,
 };
 function fmtTime(at) {
   const d = new Date(at);

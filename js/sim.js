@@ -53,20 +53,21 @@ const P = {
   houseDoor: { x: HOUSE.x, y: PLAT.y, z: HOUSE.z + HOUSE.d / 2 + 0.2 },
   houseIn: { x: HOUSE.x, y: PLAT.y, z: HOUSE.z - 0.03 },
 };
-export const NEST_SPOTS = [[-0.08, 0.03], [0.11, -0.06], [0.02, 0.13]].map(([dx, dz]) => ({ x: NEST.x + dx, y: PLAT.y + 0.03, z: NEST.z + dz }));
+export const NEST_SPOTS = [[-0.13, 0.04], [0.13, -0.07], [0.02, 0.15]].map(([dx, dz]) => ({ x: NEST.x + dx, y: PLAT.y + 0.03, z: NEST.z + dz }));
 const ENCLOSED = new Set(['wheel', 'sand', 'log', 'tunnel', 'house']);
 const ATOMIC = new Set(['eat', 'happy', 'stash', 'arrive', 'poop']);
 export const POOP_DAYS = 3; // 大便最多留在籠子裡 3 天（今天＋前兩天）
 export const HIDDEN_PLACES = new Set(['tunnel', 'house']);
 
+// 真的倉鼠：大部分時間在休息、張望、理毛，偶爾才跑一陣子
 const ACTS = [
-  ['wander', 22], ['sit', 7], ['groom', 8], ['loaf', 6], ['stand', 5], ['dig', 6], ['wheel', 12], ['sand', 6],
-  ['drink', 6], ['tunnel', 10], ['logTop', 5], ['house', 6], ['nap', 5], ['otherLevel', 8],
+  ['wander', 14], ['sit', 10], ['groom', 9], ['loaf', 13], ['stand', 5], ['dig', 6], ['wheel', 10], ['sand', 5],
+  ['drink', 6], ['tunnel', 8], ['logTop', 4], ['house', 6], ['nap', 6], ['otherLevel', 7],
 ];
 const ACT_TOTAL = ACTS.reduce((s, a) => s + a[1], 0);
-const COOL = { sand: 90e3, drink: 60e3, nap: 150e3, wheel: 20e3, tunnel: 25e3, house: 40e3, logTop: 40e3, dig: 20e3 };
+const COOL = { sand: 15 * 60e3, drink: 10 * 60e3, nap: 20 * 60e3, wheel: 3 * 60e3, tunnel: 4 * 60e3, house: 6 * 60e3, logTop: 6 * 60e3, dig: 3 * 60e3 };
 const LOCKED = new Set(['wheel', 'sand', 'drink', 'tunnel', 'logTop', 'house']);
-export const EAT_SEC = { kibble: 4, seed: 3, fish: 4.5 };
+export const EAT_SEC = { kibble: 8, seed: 6, fish: 9 };
 
 function inObstacle(lvl, x, z, pad = 0, skip) {
   return (lvl === 1 ? OB1 : OB2).some((o) => o !== skip && d2(o, { x, z }) < o.r + pad);
@@ -210,18 +211,18 @@ class Plan {
     const pts = route(this.h.pos, to, lvl);
     for (const p of pts) this.leg({ x: p.x, y: levelY(lvl), z: p.z }, 'walk', speed, 'floor' + lvl, lvl);
   }
-  goTo(to, lvl, speed = 0.85) {
+  goTo(to, lvl, speed = 0.55) {
     this.exit();
     const h = this.h;
     if (h.level !== lvl) {
       if (h.level === 1) {
         this.walkOn(1, P.rampBot, speed);
-        this.leg(P.rampEdge, 'climb', 0.7, 'floor2', 2);
-        this.leg(P.rampTopIn, 'walk', 0.6, 'floor2', 2);
+        this.leg(P.rampEdge, 'climb', 0.45, 'floor2', 2);
+        this.leg(P.rampTopIn, 'walk', 0.45, 'floor2', 2);
       } else {
         this.walkOn(2, P.rampTopIn, speed);
-        this.leg(P.rampEdge, 'walk', 0.5, 'floor2', 2);
-        this.leg(P.rampBot, 'climb', 0.85, 'floor1', 1);
+        this.leg(P.rampEdge, 'walk', 0.4, 'floor2', 2);
+        this.leg(P.rampBot, 'climb', 0.6, 'floor1', 1);
       }
     }
     this.walkOn(lvl, to, speed);
@@ -529,8 +530,9 @@ export class Sim {
     h.nextT = Infinity;
 
     if (isNight(t)) {
-      p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.7);
-      p.stay('groom', 1, { face: 0.5 });
+      p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.5);
+      p.stay('groom', 2.5, { face: 0.5 });
+      p.stay('burrow', 4); // 鑽進棉花裡
       p.stay('sleep', (this.next - p.t) / 1000 + 3600);
       p.flush();
       h.segs.push(...p.segs);
@@ -539,8 +541,8 @@ export class Sim {
 
     let food = null;
     if (intent?.type === 'eat') food = st.foods[intent.fid];
-    if (intent?.type === 'happy') p.stay('happy', 1.5);
-    else if (intent?.type === 'wake') { p.stay('groom', 1.6, { face: 0.4 }); p.stay('sit', 1.2); }
+    if (intent?.type === 'happy') { p.stay('happy', 1.6); p.stay('sit', rr(R, 2, 4)); }
+    else if (intent?.type === 'wake') { p.stay('stand', 2.5, { face: 0.4 }); p.stay('groom', 4); p.stay('sit', 3); }
     else {
       if (!food) food = this.nearestFood(h, t);
       const poop = food ? null : this.duePoop(h, t);
@@ -572,29 +574,33 @@ export class Sim {
       if (inBounds(pp.level, x, z) && !inObstacle(pp.level, x, z)) { stand = { x, z, face }; break; }
     }
     stand = stand || { x: pp.x, z: pp.z + 0.12, face: 0 };
-    p.goTo({ x: stand.x, y: levelY(pp.level), z: stand.z }, pp.level, 0.8);
-    const s = p.stay('poop', 1.4, { face: stand.face });
-    pp.appearAt = s.t1 - 400;
+    p.goTo({ x: stand.x, y: levelY(pp.level), z: stand.z }, pp.level, 0.5);
+    p.stay('sniff', 1.5, { face: stand.face });
+    const s = p.stay('poop', 2.2, { face: stand.face });
+    pp.appearAt = s.t1 - 600;
     // 拉完往旁邊走開一點
     const away = { x: stand.x + (rnd(h.rng) < 0.5 ? -0.3 : 0.3), y: levelY(pp.level), z: stand.z + rr(h.rng, -0.1, 0.1) };
-    if (inBounds(pp.level, away.x, away.z) && !inObstacle(pp.level, away.x, away.z, 0.02)) p.goTo(away, pp.level, 0.6);
-    p.stay('sniff', 0.6);
+    if (inBounds(pp.level, away.x, away.z) && !inObstacle(pp.level, away.x, away.z, 0.02)) p.goTo(away, pp.level, 0.45);
+    p.stay('sniff', 2);
   }
 
   planEat(p, h, f) {
     f.claimedBy = h.id;
     h.food = f.id;
     const spot = eatSpot(f);
-    p.goTo(spot, f.level, 1.05);
+    p.goTo(spot, f.level, 0.85); // 看到食物會跑快一點
+    p.stay('sniff', 1.2, { face: spot.face });
     const s = p.stay('eat', EAT_SEC[f.kind] || 4, { face: spot.face, food: f.id, foodKind: f.kind });
     f.eatT0 = s.t0;
     f.eatenAt = s.t1;
     if (f.kind === 'kibble' && rnd(h.rng) < 0.5) {
-      p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.9);
-      p.stay('stash', 1.8, { face: rr(h.rng, -0.8, 0.8) });
+      p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.6);
+      p.stay('stash', 3.5, { face: rr(h.rng, -0.8, 0.8) });
+      p.stay('groom', 3);
     } else if (f.kind !== 'kibble') {
-      p.stay('happy', 1.3);
-    }
+      p.stay('happy', 1.5);
+      p.stay('groom', 4);
+    } else p.stay('groom', 3);
   }
 
   lock(name, h, until) {
@@ -610,40 +616,46 @@ export class Sim {
     if (COOL[act]) h.cool[act] = t;
     const startT = p.t;
 
+    const walk = () => rr(R, 0.4, 0.65);
     switch (act) {
-      case 'sit': p.stay('sit', rr(R, 2, 4)); break;
-      case 'groom': p.stay('groom', rr(R, 1.5, 2.6)); break;
-      case 'loaf': p.stay('loaf', rr(R, 3, 6)); break;
-      case 'stand': p.stay('stand', rr(R, 1.5, 3)); break;
+      case 'sit': p.stay('sit', rr(R, 6, 14)); break;
+      case 'groom': p.stay('groom', rr(R, 4, 8)); p.stay('sit', rr(R, 2, 5)); break;
+      case 'loaf': p.stay('loaf', rr(R, 12, 35)); break;
+      case 'stand': p.stay('stand', rr(R, 2.5, 5)); p.stay('sit', rr(R, 2, 4)); break;
       case 'dig': {
-        p.goTo(randomSpot(R, 1), 1, rr(R, 0.7, 1));
-        p.stay('dig', rr(R, 2.5, 4), { face: rr(R, -2.5, 2.5) });
-        p.stay('sniff', 0.7);
+        p.goTo(randomSpot(R, 1), 1, walk());
+        p.stay('sniff', rr(R, 1.5, 3));
+        p.stay('dig', rr(R, 4, 8), { face: rr(R, -2.5, 2.5) });
+        p.stay('sit', rr(R, 2, 4));
         break;
       }
       case 'wheel': {
-        p.goTo(P.wheelFront, 1, 0.9);
-        p.stay('sniff', 0.5, { face: PI });
-        p.leg(P.wheelIn, 'jump', 0, 'wheel', 1, 0.45);
-        p.stay('wheelRun', rr(R, 4, 10), { face: PI / 2 });
-        p.stay('wheelSit', rr(R, 0.8, 2), { face: PI / 2 });
-        p.leg(P.wheelFront, 'jump', 0, 'floor1', 1, 0.45);
+        p.goTo(P.wheelFront, 1, walk());
+        p.stay('sniff', 1.2, { face: PI });
+        p.leg(P.wheelIn, 'jump', 0, 'wheel', 1, 0.6);
+        p.stay('wheelSit', rr(R, 1.5, 3), { face: PI / 2 });
+        p.stay('wheelRun', rr(R, 12, 40), { face: PI / 2 });
+        p.stay('wheelSit', rr(R, 2, 4), { face: PI / 2 });
+        p.leg(P.wheelFront, 'jump', 0, 'floor1', 1, 0.6);
+        p.stay('groom', rr(R, 2, 4));
         break;
       }
       case 'sand': {
-        p.goTo(P.sandEntry, 1, 0.9);
-        p.stay('sniff', 0.6, { face: 0 });
-        p.leg(P.sandIn, 'jump', 0, 'sand', 1, 0.45);
-        p.stay('sniff', 0.6);
-        p.stay('bath', rr(R, 3, 5));
-        p.stay('groom', 1.2);
-        p.leg(P.sandEntry, 'jump', 0, 'floor1', 1, 0.45);
-        p.stay('shake', 0.8);
+        p.goTo(P.sandEntry, 1, walk());
+        p.stay('sniff', 1.5, { face: 0 });
+        p.leg(P.sandIn, 'jump', 0, 'sand', 1, 0.6);
+        p.stay('sniff', 1.5);
+        p.stay('bath', rr(R, 5, 10));
+        p.stay('groom', 3);
+        p.leg(P.sandEntry, 'jump', 0, 'floor1', 1, 0.6);
+        p.stay('shake', 1.2);
+        p.stay('groom', rr(R, 2, 4));
         break;
       }
       case 'drink': {
-        p.goTo(P.drink, 1, 0.9);
-        p.stay('drink', rr(R, 2, 3.5), { face: -PI / 2 });
+        p.goTo(P.drink, 1, walk());
+        p.stay('drink', rr(R, 4, 8), { face: -PI / 2 });
+        p.stay('sit', rr(R, 1.5, 3));
         break;
       }
       case 'tunnel': {
@@ -651,57 +663,61 @@ export class Sim {
         const dir = left ? 1 : -1;
         const inX = left ? P.logL : P.logR;
         const farX = left ? P.logR : P.logL;
-        p.goTo({ x: inX - dir * 0.25, y: 0, z: LOG.z }, 1, 0.9);
-        p.stay('sniff', 0.6, { face: dir * PI / 2 });
-        p.leg({ x: inX, y: TUN_Y, z: LOG.z }, 'creep', 0.5, 'tunnel', 1);
-        p.leg({ x: LOG.x + rr(R, -0.08, 0.08), y: TUN_Y, z: LOG.z }, 'creep', 0.45, 'tunnel', 1);
-        p.stay('hide', rr(R, 2, 6));
+        p.goTo({ x: inX - dir * 0.25, y: 0, z: LOG.z }, 1, walk());
+        p.stay('sniff', 1.5, { face: dir * PI / 2 });
+        p.leg({ x: inX, y: TUN_Y, z: LOG.z }, 'creep', 0.3, 'tunnel', 1);
+        p.leg({ x: LOG.x + rr(R, -0.08, 0.08), y: TUN_Y, z: LOG.z }, 'creep', 0.3, 'tunnel', 1);
+        p.stay('hide', rr(R, 8, 25));
         if (rnd(R) < 0.65) {
-          p.leg({ x: farX - dir * 0.05, y: TUN_Y, z: LOG.z }, 'creep', 0.45, 'tunnel', 1);
-          p.stay('peek', rr(R, 1.5, 3));
-          p.leg({ x: farX, y: TUN_Y, z: LOG.z }, 'creep', 0.45, 'tunnel', 1);
-          p.leg({ x: farX + dir * 0.25, y: 0, z: LOG.z }, 'walk', 0.6, 'floor1', 1);
+          p.leg({ x: farX - dir * 0.05, y: TUN_Y, z: LOG.z }, 'creep', 0.3, 'tunnel', 1);
+          p.stay('peek', rr(R, 4, 8));
+          p.leg({ x: farX, y: TUN_Y, z: LOG.z }, 'creep', 0.3, 'tunnel', 1);
+          p.leg({ x: farX + dir * 0.25, y: 0, z: LOG.z }, 'walk', 0.4, 'floor1', 1);
         } else {
-          p.leg({ x: inX, y: TUN_Y, z: LOG.z }, 'creep', 0.45, 'tunnel', 1);
-          p.leg({ x: inX - dir * 0.25, y: 0, z: LOG.z }, 'walk', 0.6, 'floor1', 1);
+          p.leg({ x: inX, y: TUN_Y, z: LOG.z }, 'creep', 0.3, 'tunnel', 1);
+          p.leg({ x: inX - dir * 0.25, y: 0, z: LOG.z }, 'walk', 0.4, 'floor1', 1);
         }
+        p.stay('sit', rr(R, 2, 4));
         break;
       }
       case 'logTop': {
-        p.goTo(P.logFront, 1, 0.9);
-        p.stay('stand', 0.8, { face: PI });
-        p.leg(P.logTop, 'jump', 0, 'log', 1, 0.5);
-        p.stay('loaf', rr(R, 2, 4), { face: rr(R, -0.7, 0.7) });
-        p.stay('loaf', rr(R, 1.5, 3), { face: rr(R, -0.7, 0.7) });
-        p.leg(P.logFront, 'jump', 0, 'floor1', 1, 0.5);
+        p.goTo(P.logFront, 1, walk());
+        p.stay('stand', 1.5, { face: PI });
+        p.leg(P.logTop, 'jump', 0, 'log', 1, 0.7);
+        p.stay('loaf', rr(R, 6, 15), { face: rr(R, -0.7, 0.7) });
+        p.stay('loaf', rr(R, 4, 10), { face: rr(R, -0.7, 0.7) });
+        p.leg(P.logFront, 'jump', 0, 'floor1', 1, 0.7);
         break;
       }
       case 'house': {
-        p.goTo(P.houseDoor, 2, 0.85);
-        p.stay('sniff', 0.6, { face: PI });
-        p.leg(P.houseIn, 'walk', 0.45, 'house', 2);
-        p.stay(rnd(R) < 0.5 ? 'loaf' : 'nap', rr(R, 4, 12), { face: 0 });
-        p.leg(P.houseDoor, 'walk', 0.5, 'floor2', 2);
+        p.goTo(P.houseDoor, 2, walk());
+        p.stay('sniff', 1.5, { face: PI });
+        p.leg(P.houseIn, 'walk', 0.3, 'house', 2);
+        p.stay(rnd(R) < 0.5 ? 'loaf' : 'nap', rr(R, 15, 60), { face: 0 });
+        p.stay('sit', rr(R, 2, 4), { face: 0 });
+        p.leg(P.houseDoor, 'walk', 0.35, 'floor2', 2);
         break;
       }
       case 'nap': {
-        p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.7);
-        p.stay('groom', 0.8, { face: 0.5 });
-        p.stay('nap', rr(R, 15, 40));
-        p.stay('groom', 1);
+        p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.5);
+        p.stay('groom', 2, { face: 0.5 });
+        p.stay('burrow', 3.5);
+        p.stay('nap', rr(R, 60, 240));
+        p.stay('stand', 2);
+        p.stay('groom', 3);
         break;
       }
       case 'otherLevel':
       case 'wander': {
         const lvl = act === 'otherLevel' ? (h.level === 1 ? 2 : 1) : h.level;
-        const n = 1 + Math.floor(rnd(R) * 3);
+        const n = rnd(R) < 0.7 ? 1 : 2;
         for (let i = 0; i < n; i++) {
-          p.goTo(randomSpot(R, lvl), lvl, rr(R, 0.6, 1));
-          const r = rnd(R);
-          if (r < 0.4) p.stay('sniff', rr(R, 0.8, 1.6));
-          else if (r < 0.6) p.stay('sit', rr(R, 0.8, 1.8));
+          p.goTo(randomSpot(R, lvl), lvl, walk());
+          // 走到一個地方一定會停下來看看
+          if (rnd(R) < 0.55) p.stay('sniff', rr(R, 3, 6));
+          else p.stay('sit', rr(R, 4, 9));
         }
-        p.stay('sit', rr(R, 0.6, 1.4), { face: rr(R, -0.6, 0.6) });
+        p.stay('sit', rr(R, 3, 6), { face: rr(R, -0.6, 0.6) });
         break;
       }
     }
@@ -719,16 +735,30 @@ export class Sim {
     const s = this.segAt(h, t);
     if (!s) return null;
     if (s.kind === 'move') {
-      let L = s.legs.find((l) => t < l.t1) || s.legs[s.legs.length - 1];
+      let li = s.legs.findIndex((l) => t < l.t1);
+      if (li < 0) li = s.legs.length - 1;
+      const L = s.legs[li];
       const k = clamp((t - L.t0) / (L.t1 - L.t0 || 1), 0, 1);
-      const pos = lerp3(L.from, L.to, k);
-      if (L.mode === 'jump') pos.y += 4 * k * (1 - k) * 0.14;
       const hd = d2(L.from, L.to);
       const sec = (L.t1 - L.t0) / 1000;
+      // 畫面用：一段路的開頭慢慢加速、結尾慢慢停下（不影響模擬的時間）
+      const walky = (l) => l && (l.mode === 'walk' || l.mode === 'creep');
+      let e = k;
+      let v = 1;
+      if (walky(L)) {
+        const aIn = walky(s.legs[li - 1]) ? 0 : Math.min(0.45, 0.45 / sec);
+        const aOut = walky(s.legs[li + 1]) ? 0 : Math.min(0.45, 0.5 / sec);
+        const vmax = 1 / (1 - aIn / 2 - aOut / 2);
+        if (aIn && k < aIn) { e = (vmax * k * k) / (2 * aIn); v = (vmax * k) / aIn; }
+        else if (aOut && k > 1 - aOut) { e = 1 - (vmax * (1 - k) * (1 - k)) / (2 * aOut); v = (vmax * (1 - k)) / aOut; }
+        else { e = vmax * (aIn / 2) + vmax * (k - aIn); v = vmax; }
+      }
+      const pos = lerp3(L.from, L.to, clamp(e, 0, 1));
+      if (L.mode === 'jump') pos.y += 4 * k * (1 - k) * 0.14;
       return {
         kind: 'move', mode: L.mode, pos, place: L.place, level: L.level,
         heading: hd > 0.02 ? heading(L.from, L.to) : null,
-        speed: L.mode === 'jump' ? 0 : hd / sec,
+        speed: L.mode === 'jump' ? 0 : (hd / sec) * v,
         slope: L.mode === 'climb' ? Math.atan2(L.to.y - L.from.y, hd || 1) : 0,
         k, t0: L.t0, t1: L.t1,
       };
