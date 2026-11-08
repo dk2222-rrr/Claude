@@ -1,3 +1,4 @@
+import { SHOP, setupOf, shopState } from './shop.js';
 // 倉鼠的數值、衰退與所有動作的規則（雲端與單機模式共用）
 
 export const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
@@ -61,13 +62,14 @@ export function newRoom({ dogName, anniversary, myName, color }, uid) {
     petLog: {},
     photos: 1,
     score: SCORE_START,
+    setup: { cage: 'small', items: [], cageAt: 0 }, // 一開始只有小籠子
     hamsters: [{ id: 'h1', name: dogName, color: color || 'golden', addedAt: now }],
   };
 }
 
 export const MAX_HAMSTERS = 3;
-// 倉鼠分數：照顧得好會加分，大便放著不撿會扣分（未來可以拿來升級籠子／玩具）
-export const SCORE_START = 100;
+// 好感度：照顧得好會增加，大便放著不撿會減少；可以到商店換籠子和玩具
+export const SCORE_START = 40;
 export const POOP_PENALTY_MAX = 5; // 一坨大便最多扣 5 分
 export const POOP_GRACE = 3 * 3600e3; // 3 小時內撿都不扣分
 // 放超過 3 小時後，每 2 小時扣 1 分
@@ -128,6 +130,7 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       if (now - prev > 60000) {
         d.joy = clamp(d.joy + 5);
         d.love += 1;
+        r.score = scoreOf(r) + 1; // 摸摸會慢慢增加好感度（每人每分鐘最多 1 點）
         r.petLog = { ...(r.petLog || {}), [uid]: now };
       } else {
         d.joy = clamp(d.joy + 1);
@@ -177,6 +180,19 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       if (!extra.count) return { room: r, result: { ok: true } };
       r.score = Math.max(0, scoreOf(r) - extra.count * POOP_PENALTY_MAX);
       return { room: r, event: ev('settle', { count: extra.count }), result: { ok: true } };
+    }
+
+    // 商店：用好感度換籠子／玩具
+    case 'buy': {
+      const item = SHOP.find((x) => x.id === extra.item);
+      if (!item) return { result: { ok: false, reason: 'unknown' } };
+      const setup = setupOf(r);
+      const st = shopState(item, setup);
+      if (st !== 'ok') return { result: { ok: false, reason: st } };
+      if (scoreOf(r) < item.cost) return { result: { ok: false, reason: 'points' } };
+      r.score = scoreOf(r) - item.cost;
+      r.setup = item.type === 'cage' ? { ...setup, cage: item.id, cageAt: now } : { ...setup, items: [...setup.items, item.id] };
+      return { room: r, event: ev('buy', { item: item.id, label: item.label }), result: { ok: true, item } };
     }
 
     case 'note': {

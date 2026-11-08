@@ -1,6 +1,5 @@
 // 3D 小倉鼠：卡通手繪風（描邊＋色階光影）。動作由 sim.js 算出的姿勢驅動。
 import * as THREE from 'three';
-import { NEST } from './layout.js';
 
 export const PALETTES = {
   golden: { label: '黃金鼠', fur: 0xe0a668, cream: 0xfcefd9, earIn: 0x8a7470, paw: 0xf6b7b0 },
@@ -296,7 +295,7 @@ export class Hamster {
       pooping: kind === 'poop',
       dig: kind === 'dig' || kind === 'burrow',
       burrow: kind === 'burrow',
-      inNest: p.level === 2 && Math.hypot(p.pos.x - NEST.x, p.pos.z - NEST.z) < NEST.r + 0.05,
+      inNest: !!p.inNest,
       sleeping: kind === 'sleep' || kind === 'nap',
       bathing: kind === 'bath',
       running: kind === 'wheelRun',

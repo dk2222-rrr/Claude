@@ -3,7 +3,11 @@
 //   二樓：木平台＋小木屋＋棉花窩（木梯斜坡上下樓）
 import * as THREE from 'three';
 import { Hamster } from './hamster.js';
-import { W, WHEEL, SAND, BOWL, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS, CAGE_TOP, levelY } from './layout.js';
+import { makeLayout } from './layout.js';
+
+// 目前的籠子配置（商店買了東西就換）
+let LAY, W, WHEEL, SAND, BOWL, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS;
+const levelY = (lvl) => (lvl === 2 && PLAT ? PLAT.y : 0);
 import { HIDDEN_PLACES } from './sim.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -152,14 +156,8 @@ export class World {
     this.night = false;
 
     this.buildRoom();
-    this.buildBase();
-    this.buildBars();
-    this.buildWheel();
-    this.buildSandBath();
-    this.buildBowl();
-    this.buildBottle();
-    this.buildUpstairs();
     this.buildParticles();
+    this.cage = null;
 
     this.blobMat = new THREE.MeshBasicMaterial({ map: shadowBlobTex(), transparent: true, depthWrite: false });
     this.rigs = {}; // hid → { ham, contact }
@@ -181,22 +179,52 @@ export class World {
     this.wheelVel = 0;
 
     this.resize();
+    this.setLayout(makeLayout());
     window.addEventListener('resize', () => this.resize());
     r.setAnimationLoop(() => this.frame());
   }
 
   /* ================= 場景 ================= */
+  // 換籠子／買新玩具：整個籠子重新蓋一次（倉鼠、食物、大便不動）
+  setLayout(L) {
+    if (LAY && LAY.key === L.key) return false;
+    const cageChanged = !LAY || LAY.cage !== L.cage;
+    LAY = L;
+    ({ W, WHEEL, SAND, BOWL, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS } = L);
+    if (this.cage) {
+      this.scene.remove(this.cage);
+      this.cage.traverse((o) => { o.geometry?.dispose?.(); });
+    }
+    this.cage = new THREE.Group();
+    this.scene.add(this.cage);
+    if (this.desk) this.desk.position.y = W.baseBottom - 0.02;
+    this.rotor = null;
+    this.buildBase();
+    this.buildBars();
+    this.buildBowl();
+    this.buildBottle();
+    this.buildNest();
+    if (WHEEL) this.buildWheel();
+    if (SAND) this.buildSandBath();
+    if (LOG) this.buildLog();
+    if (PLAT) this.buildPlatform();
+    if (HOUSE) this.buildHouse();
+    if (cageChanged) this.resetView();
+    return true;
+  }
+
   buildRoom() {
     const s = this.scene;
-    const desk = mesh(new THREE.PlaneGeometry(14, 10), std(0xffffff, { map: woodTex('#d8b48a', 'rgba(120,75,35,', [3, 3]), roughness: 0.6 }), 0, W.baseBottom - 0.02, 0, { cast: false });
+    const desk = mesh(new THREE.PlaneGeometry(14, 10), std(0xffffff, { map: woodTex('#d8b48a', 'rgba(120,75,35,', [3, 3]), roughness: 0.6 }), 0, -0.32, 0, { cast: false });
     desk.rotation.x = -Math.PI / 2;
+    this.desk = desk;
     s.add(desk);
     this.wall = mesh(new THREE.PlaneGeometry(16, 8), std(0xf4e6da, { roughness: 1 }), 0, 3.5, -2.6, { cast: false });
     s.add(this.wall);
   }
 
   buildBase() {
-    const s = this.scene;
+    const s = this.cage;
     const { x: X, z: Z, baseTop: T, baseBottom: B } = W;
     const plastic = std(0xfdf8f4, { roughness: 0.35 });
     const accent = std(0xffb3c4, { roughness: 0.4 });
@@ -248,9 +276,9 @@ export class World {
 
   // 鐵籠：只有後面和左右兩側；正對鏡頭的前面是開的。轉到側面看時，擋住視線的那面會變淡。
   buildBars() {
-    const s = this.scene;
+    const s = this.cage;
     const { x: X, z: Z, baseTop: T } = W;
-    const top = CAGE_TOP;
+    const top = LAY.top;
     const len = top - T;
     const geo = new THREE.CylinderGeometry(0.008, 0.008, len, 5);
     const gap = 0.09;
@@ -287,7 +315,8 @@ export class World {
 
   buildWheel() {
     const g = new THREE.Group();
-    g.position.set(WHEEL.x, WHEEL.y, WHEEL.z);
+    const wy = WHEEL.r + 0.12;
+    g.position.set(WHEEL.x, wy, WHEEL.z);
     const { r, depth } = WHEEL;
     const rotor = new THREE.Group();
     g.add(rotor);
@@ -320,10 +349,10 @@ export class World {
     hub.position.z = -depth / 2 - 0.04;
     g.add(hub);
     const standMat = std(0xffd27a, { roughness: 0.45 });
-    g.add(mesh(new THREE.BoxGeometry(0.1, WHEEL.y + 0.02, 0.05), standMat, 0, -WHEEL.y / 2, -depth / 2 - 0.08));
-    g.add(mesh(new THREE.BoxGeometry(0.75, 0.04, 0.32), standMat, 0, -WHEEL.y + 0.02, -depth / 2 - 0.12));
+    g.add(mesh(new THREE.BoxGeometry(0.1, wy + 0.02, 0.05), standMat, 0, -wy / 2, -depth / 2 - 0.08));
+    g.add(mesh(new THREE.BoxGeometry(r * 1.25, 0.04, 0.32), standMat, 0, -wy + 0.02, -depth / 2 - 0.12));
     this.rotor = rotor;
-    this.scene.add(g);
+    this.cage.add(g);
   }
 
   buildSandBath() {
@@ -346,7 +375,7 @@ export class World {
     }
     const sandTex = speckleTex('#e9d3a7', ['#d6bb88', '#f4e3c0', '#c9a874', '#fff2d6'], 9000, [6, 2]);
     g.add(mesh(new THREE.LatheGeometry(sandPts, 64), std(0xffffff, { map: sandTex, roughness: 1, side: THREE.DoubleSide }), 0, 0, 0, { cast: false }));
-    this.scene.add(g);
+    this.cage.add(g);
   }
 
   buildBowl() {
@@ -358,7 +387,7 @@ export class World {
     ];
     g.add(mesh(new THREE.LatheGeometry(pts, 48), std(0xffc9a8, { roughness: 0.2, side: THREE.DoubleSide })));
     g.position.set(BOWL.x, 0.005, BOWL.z);
-    this.scene.add(g);
+    this.cage.add(g);
   }
 
   buildBottle() {
@@ -382,11 +411,11 @@ export class World {
     b.position.set(0.04, 0.78, 0);
     g.add(b);
     g.position.set(-W.x + 0.17, 0, DRINK.z);
-    this.scene.add(g);
+    this.cage.add(g);
   }
 
-  buildUpstairs() {
-    const s = this.scene;
+  buildPlatform() {
+    const s = this.cage;
     const wood = std(0xffffff, { map: woodTex('#d6a46c', 'rgba(115,65,25,', [2, 1]), roughness: 0.75 });
     const woodDark = std(0xffffff, { map: woodTex('#b9844e', 'rgba(90,50,20,'), roughness: 0.8 });
     const { x0, x1, z0, z1, y } = PLAT;
@@ -411,7 +440,12 @@ export class World {
     for (let k = -len / 2 + 0.06; k < len / 2; k += 0.11) ramp.add(mesh(new THREE.BoxGeometry(RAMP.w - 0.02, 0.02, 0.025), woodDark, 0, 0.01, k));
     [-1, 1].forEach((sd) => ramp.add(mesh(new THREE.BoxGeometry(0.025, 0.05, len), woodDark, sd * (RAMP.w / 2 - 0.0125), 0.02, 0)));
     s.add(ramp);
+  }
 
+  buildHouse() {
+    const s = this.cage;
+    const y = levelY(HOUSE.level);
+    const wood = std(0xffffff, { map: woodTex('#d6a46c', 'rgba(115,65,25,', [2, 1]), roughness: 0.75 });
     // 小木屋
     const house = new THREE.Group();
     const hw = HOUSE.w;
@@ -437,20 +471,26 @@ export class World {
     [-1, 1].forEach((sd) => house.add(mesh(new THREE.ExtrudeGeometry(gable, { depth: 0.03, bevelEnabled: false }), wood, 0, hh, sd > 0 ? hd / 2 - 0.03 : -hd / 2)));
     house.position.set(HOUSE.x, y, HOUSE.z);
     s.add(house);
+  }
 
-    // 大棉花窩：後面堆得比較高，倉鼠睡覺時會鑽進去
+  buildNest() {
+    const s = this.cage;
+    const y = levelY(NEST.level);
+    // 棉花窩：一開始是一小團；買了「大棉花窩」後面會堆得很高，可以整隻鑽進去
     const nest = new THREE.Group();
     const cotton = std(0xffffff, { roughness: 1 });
     const R = NEST.r;
+    const big = NEST.big;
     const puffs = [];
-    for (let i = 0; i < 80; i++) {
-      const a = (i / 80) * Math.PI * 2 + rand(-0.06, 0.06);
+    const ringN = big ? 80 : 40;
+    for (let i = 0; i < ringN; i++) {
+      const a = (i / ringN) * Math.PI * 2 + rand(-0.06, 0.06);
       const back = Math.max(0, -Math.sin(a)); // 後面（z<0）比較高
-      const rr = rand(R - 0.03, R + 0.07);
-      const sz = rand(0.07, 0.12) + back * 0.03;
-      puffs.push([Math.cos(a) * rr, rand(0.04, 0.1) + back * rand(0.05, 0.12), Math.sin(a) * rr, sz]);
+      const rr = rand(R - 0.03, R + (big ? 0.07 : 0.03));
+      const sz = big ? rand(0.07, 0.12) + back * 0.03 : rand(0.045, 0.075);
+      puffs.push([Math.cos(a) * rr, big ? rand(0.04, 0.1) + back * rand(0.05, 0.12) : rand(0.02, 0.05), Math.sin(a) * rr, sz]);
     }
-    for (let i = 0; i < 26; i++) {
+    for (let i = 0; i < (big ? 26 : 14); i++) {
       const a = Math.random() * Math.PI * 2;
       const rr = Math.sqrt(Math.random()) * (R - 0.08);
       puffs.push([Math.cos(a) * rr, rand(0.015, 0.04), Math.sin(a) * rr, rand(0.05, 0.08)]);
@@ -464,8 +504,9 @@ export class World {
     puff.castShadow = puff.receiveShadow = true;
     nest.add(puff);
     nest.add(mesh(new THREE.CylinderGeometry(R + 0.03, R + 0.06, 0.035, 40), std(0xfff6ef, { roughness: 1 }), 0, 0.017, 0));
-    const hay = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.004, 0.004, 0.18, 4), std(0xe5c66f, { roughness: 0.9 }), 100);
-    for (let i = 0; i < 100; i++) {
+    const hayN = big ? 100 : 40;
+    const hay = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.004, 0.004, 0.18, 4), std(0xe5c66f, { roughness: 0.9 }), hayN);
+    for (let i = 0; i < hayN; i++) {
       const a = Math.random() * Math.PI * 2;
       const rr = rand(0.05, R + 0.1);
       m.compose(new THREE.Vector3(Math.cos(a) * rr, rand(0.02, 0.12), Math.sin(a) * rr), new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2 + rand(-0.4, 0.4), 0, Math.random() * 3)), new THREE.Vector3(1, 1, 1));
@@ -474,8 +515,11 @@ export class World {
     nest.add(hay);
     nest.position.set(NEST.x, y, NEST.z);
     s.add(nest);
+  }
 
-    // 一樓：二樓下面的木頭隧道（倉鼠會鑽進去）
+  buildLog() {
+    const s = this.cage;
+    // 木頭隧道（倉鼠會鑽進去）
     const log = new THREE.Group();
     const bark = std(0xffffff, { map: woodTex('#8a5a35', 'rgba(50,25,10,', [3, 1]), roughness: 0.95 });
     const inner = std(0xffffff, { map: woodTex('#c79a68', 'rgba(90,55,25,', [3, 1]), roughness: 0.95, side: THREE.BackSide });
@@ -642,15 +686,15 @@ export class World {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    if (this.cam.dist == null) this.cam.dist = this.fitDist();
+    if (this.cam.dist == null && W) this.cam.dist = this.fitDist();
   }
   fitDist() {
     const tanH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    return clamp(1.98 / (tanH * Math.min(1.6, this.camera.aspect)), 3.5, 11);
+    return clamp((W.x + 0.18) / (tanH * Math.min(1.6, this.camera.aspect)), 2.2, 11);
   }
   resetView() {
     Object.assign(this.cam, { yaw: 0, pitch: 0.6, dist: this.fitDist() });
-    this.cam.target.set(0, 0.72, 0);
+    this.cam.target.set(0, LAY.top * 0.31, 0);
   }
   orbit(dx, dy) {
     this.cam.yaw = clamp(this.cam.yaw - dx * 0.006, -1.2, 1.2);
@@ -666,8 +710,8 @@ export class World {
     t.addScaledVector(right, -dx * k);
     const fwd = new THREE.Vector3(-Math.sin(this.cam.yaw), 0, -Math.cos(this.cam.yaw));
     t.addScaledVector(fwd, dy * k);
-    t.x = clamp(t.x, -1.7, 1.7);
-    t.z = clamp(t.z, -1.0, 1.0);
+    t.x = clamp(t.x, -W.x + 0.1, W.x - 0.1);
+    t.z = clamp(t.z, -W.z + 0.1, W.z - 0.1);
   }
   updateCamera() {
     const { yaw, pitch, dist, target } = this.cam;
@@ -737,7 +781,7 @@ export class World {
       return t > 0 ? ray.origin.clone().addScaledVector(ray.direction, t) : null;
     };
     let lvl = 0;
-    let p = hitY(PLAT.y);
+    let p = PLAT ? hitY(PLAT.y) : null;
     if (p && p.x > PLAT.x0 && p.x < PLAT.x1 && p.z > PLAT.z0 && p.z < PLAT.z1) lvl = 2;
     else {
       p = hitY(0);
@@ -766,7 +810,7 @@ export class World {
       }
       x = clamp(x, b.x0, b.x1);
       z = clamp(z, b.z0, b.z1);
-      if (lvl === 1 && x > RAMP.x - 0.26 && z > -0.2) x = RAMP.x - 0.27;
+      if (lvl === 1 && RAMP && x > RAMP.x - 0.26 && z > -0.2) x = RAMP.x - 0.27;
     }
     return { x, y, z, level: lvl };
   }
@@ -815,21 +859,22 @@ export class World {
       rig.contact.position.set(rig.ham.pos.x, rig.ham.pos.y + 0.012, rig.ham.pos.z);
       rig.contact.rotation.z = rig.ham.heading;
       if (pose.kind === 'bath' && Math.random() < 0.7) this.emit(rig.ham.pos, 0xe2c99a, 1, 0.07);
-      const cover = rig.ham.nestK * Math.min(1, rig.ham.sleepK * 1.4);
+      // 大棉花窩可以整隻蓋住；一般的小窩只蓋一點
+      const cover = rig.ham.nestK * Math.min(1, rig.ham.sleepK * 1.4) * (NEST.big ? 1 : 0.6);
       rig.blanket.visible = cover > 0.03;
       if (rig.blanket.visible) {
         rig.blanket.position.copy(rig.ham.root.position);
         rig.blanket.rotation.y = rig.ham.heading;
         rig.blanket.scale.setScalar(cover);
       }
-      if (pose.kind === 'burrow' && Math.random() < 0.5) this.emit(rig.ham.pos, 0xffffff, 1, PLAT.y + 0.02);
+      if (pose.kind === 'burrow' && Math.random() < 0.5) this.emit(rig.ham.pos, 0xffffff, 1, levelY(NEST.level) + 0.02);
       if (pose.kind === 'dig' && Math.random() < 0.6) {
         const back = this._v.set(-Math.sin(rig.ham.heading), 0.3, -Math.cos(rig.ham.heading));
         this.emit(rig.ham.pos, 0xf1e6d0, 1, 0.01, back.clone());
       }
     }
     this.wheelVel = THREE.MathUtils.damp(this.wheelVel, running ? 6.5 : 0, running ? 3 : 1, dt);
-    this.rotor.rotation.z -= this.wheelVel * dt;
+    if (this.rotor) this.rotor.rotation.z -= this.wheelVel * dt;
 
     P.forEach((pt, i) => {
       if (pt.life > 0) {

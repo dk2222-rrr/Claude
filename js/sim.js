@@ -3,7 +3,45 @@
 //
 // 一天的節奏（台灣時間）：08:00 在窩裡醒來 → 白天隨機活動（也會小睡）→ 21:00 回窩睡覺。
 // 台灣 08:00 = UTC 00:00，21:00 = UTC 13:00。
-import { WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS, BOWL, TOILET, levelY } from './layout.js';
+import { makeLayout } from './layout.js';
+
+// 目前籠子的配置（買了新籠子／玩具就換一組）
+let LAY, WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, OBA1, OBA2, BOUNDS, TOILET, BOWL, P, TUN_Y;
+export let NEST_SPOTS = [];
+const levelY = (lvl) => (lvl === 2 && PLAT ? PLAT.y : 0);
+const floorOf = (lvl) => 'floor' + lvl;
+export function setLayout(L) {
+  LAY = L;
+  ({ WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, OBA1, OBA2, BOUNDS, TOILET, BOWL } = L);
+  TUN_Y = LOG ? LOG.r - LOG.inner : 0;
+  P = { drink: { x: DRINK.x, y: 0, z: DRINK.z } };
+  if (WHEEL) {
+    P.wheelFront = { x: WHEEL.x, y: 0, z: WHEEL.z + WHEEL.depth / 2 + 0.25 };
+    P.wheelIn = { x: WHEEL.x, y: 0.12 + 0.015, z: WHEEL.z };
+  }
+  if (SAND) {
+    P.sandEntry = { x: SAND.x, y: 0, z: SAND.z - SAND.r - 0.2 };
+    P.sandIn = { x: SAND.x, y: 0.085, z: SAND.z };
+  }
+  if (LOG) {
+    P.logL = LOG.x - LOG.len / 2;
+    P.logR = LOG.x + LOG.len / 2;
+    P.logFront = { x: LOG.x, y: 0, z: LOG.z + LOG.r + 0.25 };
+    P.logTop = { x: LOG.x, y: LOG.r * 2, z: LOG.z };
+  }
+  if (RAMP) {
+    P.rampBot = { x: RAMP.x, y: 0, z: RAMP.zBot + 0.06 };
+    P.rampEdge = { x: RAMP.x, y: PLAT.y, z: RAMP.zTop };
+    P.rampTopIn = { x: RAMP.x, y: PLAT.y, z: RAMP.zTop - 0.22 };
+  }
+  if (HOUSE) {
+    P.houseDoor = { x: HOUSE.x, y: levelY(HOUSE.level), z: HOUSE.z + HOUSE.d / 2 + 0.2 };
+    P.houseIn = { x: HOUSE.x, y: levelY(HOUSE.level), z: HOUSE.z - 0.03 };
+  }
+  const k = NEST.r / 0.34;
+  NEST_SPOTS = [[-0.13, 0.04], [0.13, -0.07], [0.02, 0.15]].map(([dx, dz]) => ({ x: NEST.x + dx * k, y: levelY(NEST.level) + 0.03, z: NEST.z + dz * k }));
+}
+setLayout(makeLayout());
 
 export const DAY = 86400000;
 export const NIGHT_OFF = 13 * 3600000;
@@ -35,25 +73,6 @@ const lerp3 = (a, b, k) => ({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k
 const heading = (a, b) => Math.atan2(b.x - a.x, b.z - a.z); // 只用在畫面上的朝向
 const clone = (o) => structuredClone(o);
 
-// ---- 重要位置 ----
-const TUN_Y = LOG.r - LOG.inner;
-const P = {
-  wheelFront: { x: WHEEL.x, y: 0, z: WHEEL.z + WHEEL.depth / 2 + 0.25 },
-  wheelIn: { x: WHEEL.x, y: WHEEL.y - WHEEL.r + 0.015, z: WHEEL.z },
-  sandEntry: { x: SAND.x, y: 0, z: SAND.z - SAND.r - 0.2 },
-  sandIn: { x: SAND.x, y: 0.085, z: SAND.z },
-  drink: { x: DRINK.x, y: 0, z: DRINK.z },
-  logL: LOG.x - LOG.len / 2,
-  logR: LOG.x + LOG.len / 2,
-  logFront: { x: LOG.x, y: 0, z: LOG.z + LOG.r + 0.25 },
-  logTop: { x: LOG.x, y: LOG.r * 2, z: LOG.z },
-  rampBot: { x: RAMP.x, y: 0, z: RAMP.zBot + 0.06 },
-  rampEdge: { x: RAMP.x, y: PLAT.y, z: RAMP.zTop },
-  rampTopIn: { x: RAMP.x, y: PLAT.y, z: RAMP.zTop - 0.22 },
-  houseDoor: { x: HOUSE.x, y: PLAT.y, z: HOUSE.z + HOUSE.d / 2 + 0.2 },
-  houseIn: { x: HOUSE.x, y: PLAT.y, z: HOUSE.z - 0.03 },
-};
-export const NEST_SPOTS = [[-0.13, 0.04], [0.13, -0.07], [0.02, 0.15]].map(([dx, dz]) => ({ x: NEST.x + dx, y: PLAT.y + 0.03, z: NEST.z + dz }));
 const ENCLOSED = new Set(['wheel', 'sand', 'log', 'tunnel', 'house']);
 const ATOMIC = new Set(['eat', 'happy', 'stash', 'arrive', 'poop']);
 export const POOP_DAYS = 3; // 大便最多留在籠子裡 3 天（今天＋前兩天）
@@ -69,12 +88,14 @@ const COOL = { sand: 15 * 60e3, drink: 10 * 60e3, nap: 20 * 60e3, wheel: 3 * 60e
 const LOCKED = new Set(['wheel', 'sand', 'drink', 'tunnel', 'logTop', 'house']);
 export const EAT_SEC = { kibble: 8, seed: 6, fish: 9 };
 
-function inObstacle(lvl, x, z, pad = 0, skip) {
-  return (lvl === 1 ? OB1 : OB2).some((o) => o !== skip && d2(o, { x, z }) < o.r + pad);
+function inObstacle(lvl, x, z, pad = 0, skip, all = false) {
+  const obs = all ? (lvl === 1 ? OBA1 : OBA2) : lvl === 1 ? OB1 : OB2;
+  return obs.some((o) => o !== skip && d2(o, { x, z }) < o.r + pad);
 }
 function inBounds(lvl, x, z) {
   const b = BOUNDS[lvl];
-  return x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && !(lvl === 1 && x > RAMP.x - 0.26 && z > -0.2);
+  if (!b) return false;
+  return x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && !(lvl === 1 && RAMP && x > RAMP.x - 0.26 && z > -0.2);
 }
 
 // 線段穿過障礙物就繞過去
@@ -109,14 +130,15 @@ function route(from, to, lvl) {
   return pts;
 }
 
-function randomSpot(st, lvl) {
+function randomSpot(st, lvl, all = false) {
+  if (!BOUNDS[lvl]) lvl = 1;
   const b = BOUNDS[lvl];
   for (let i = 0; i < 30; i++) {
     const x = rr(st, b.x0, b.x1);
     const z = rr(st, b.z0, b.z1);
-    if (inBounds(lvl, x, z) && !inObstacle(lvl, x, z, 0.04)) return { x, y: levelY(lvl), z };
+    if (inBounds(lvl, x, z) && !inObstacle(lvl, x, z, 0.04, null, all)) return { x, y: levelY(lvl), z };
   }
-  return lvl === 2 ? { x: 1.0, y: PLAT.y, z: -0.3 } : { x: 0.1, y: 0, z: 0.1 };
+  return { x: (b.x0 + b.x1) / 2, y: levelY(lvl), z: (b.z0 + b.z1) / 2 };
 }
 
 // 吃東西時站的位置：盡量站在食物後面、臉朝鏡頭
@@ -146,8 +168,8 @@ export function poopSchedule(seed, ham, A) {
     let p;
     if (rnd(st) < 0.6) p = { x: rr(st, TOILET.x0, TOILET.x1), y: 0, z: rr(st, TOILET.z0, TOILET.z1), level: 1 };
     else {
-      const lvl = rnd(st) < 0.7 ? 1 : 2;
-      p = { ...randomSpot(st, lvl), level: lvl };
+      const lvl = rnd(st) < 0.7 || !PLAT ? 1 : 2;
+      p = { ...randomSpot(st, lvl, true), level: lvl };
     }
     out.push({ id: `${ham.id}:${A}:${i}`, hid: ham.id, t, x: p.x, y: p.y + 0.01, z: p.z, level: p.level, appearAt: null, rot: rnd(st) * 6.28 });
   }
@@ -198,7 +220,7 @@ class Plan {
       case 'wheel': this.leg(P.wheelFront, 'jump', 0, 'floor1', 1, 0.45); break;
       case 'sand': this.leg(P.sandEntry, 'jump', 0, 'floor1', 1, 0.45); break;
       case 'log': this.leg(P.logFront, 'jump', 0, 'floor1', 1, 0.5); break;
-      case 'house': this.leg(P.houseDoor, 'walk', 0.5, 'floor2', 2); break;
+      case 'house': this.leg(P.houseDoor, 'walk', 0.5, floorOf(HOUSE.level), HOUSE.level); break;
       case 'tunnel': {
         const left = h.pos.x < LOG.x;
         this.leg({ x: left ? P.logL : P.logR, y: TUN_Y, z: LOG.z }, 'creep', 0.45, 'tunnel', 1);
@@ -214,7 +236,7 @@ class Plan {
   goTo(to, lvl, speed = 0.55) {
     this.exit();
     const h = this.h;
-    if (h.level !== lvl) {
+    if (h.level !== lvl && RAMP) {
       if (h.level === 1) {
         this.walkOn(1, P.rampBot, speed);
         this.leg(P.rampEdge, 'climb', 0.45, 'floor2', 2);
@@ -236,12 +258,13 @@ export class Sim {
   }
 
   // seed：家的種子；hamsters：[{id,name,color,addedAt}]；events：[{id,type,at,...}]
-  setInputs(seed, hamsters, events, now) {
+  setInputs(seed, hamsters, events, now, layout = makeLayout()) {
+    if (!LAY || LAY.key !== layout.key || LAY.cageAt !== layout.cageAt) setLayout(layout);
     const A = dayAnchor(now);
     this.cleans = new Map(events.filter((e) => e.type === 'clean').map((e) => [e.pid, e.at]));
     const stream = this.buildStream(A, hamsters, events);
     const pre = events.filter((e) => e.type === 'drop' && e.at < A && e.at >= nightStartBefore(A)).sort((x, y) => x.at - y.at || (x.id < y.id ? -1 : 1));
-    const key = seed + '|' + A + '|' + hamsters.map((h) => h.id + ':' + h.addedAt).join(',') + '|' + pre.map((e) => e.id).join(',');
+    const key = layout.key + '|' + layout.cageAt + '|' + seed + '|' + A + '|' + hamsters.map((h) => h.id + ':' + h.addedAt).join(',') + '|' + pre.map((e) => e.id).join(',');
     if (!this.ready || key !== this.key) {
       this.key = key;
       this.seed = seed >>> 0;
@@ -297,7 +320,7 @@ export class Sim {
     const st = this.st;
     const idx = st.order.length;
     const h = {
-      id: info.id, idx, segs: [], pos: { ...NEST_SPOTS[idx % 3] }, level: 2, place: 'floor2', face: 0.6,
+      id: info.id, idx, segs: [], pos: { ...NEST_SPOTS[idx % 3] }, level: NEST.level, place: floorOf(NEST.level), face: 0.6,
       nextT: Infinity, intent: null, rng: { s: hash(this.seed + ':' + this.A + ':' + info.id) }, cool: {}, food: null,
     };
     st.hams[h.id] = h;
@@ -306,11 +329,11 @@ export class Sim {
     for (const p of poopSchedule(this.seed, info, this.A)) { st.poops[p.id] = p; h.poops.push(p.id); }
     if (atAnchor || isNight(t)) {
       const wake = this.A + 1500 + idx * 2600;
-      h.segs.push({ kind: 'sleep', t0: atAnchor ? nightStartBefore(this.A) : t, t1: isNight(t) ? this.next : wake, pos: { ...h.pos }, face: h.face, place: h.place, level: 2 });
+      h.segs.push({ kind: 'sleep', t0: atAnchor ? nightStartBefore(this.A) : t, t1: isNight(t) ? this.next : wake, pos: { ...h.pos }, face: h.face, place: h.place, level: NEST.level, inNest: true });
       if (!isNight(t)) { h.nextT = wake; h.intent = { type: 'wake' }; }
     } else {
       // 新來的倉鼠：被放進一樓
-      h.pos = { x: 0.15 + idx * 0.22, y: 0, z: 0.2 };
+      h.pos = { x: LAY.SPAWN.x + idx * 0.18, y: 0, z: LAY.SPAWN.z };
       h.level = 1;
       h.place = 'floor1';
       h.face = 0;
@@ -530,10 +553,10 @@ export class Sim {
     h.nextT = Infinity;
 
     if (isNight(t)) {
-      p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.5);
+      p.goTo(NEST_SPOTS[h.idx % 3], NEST.level, 0.5);
       p.stay('groom', 2.5, { face: 0.5 });
-      p.stay('burrow', 4); // 鑽進棉花裡
-      p.stay('sleep', (this.next - p.t) / 1000 + 3600);
+      p.stay('burrow', 4, { inNest: true }); // 鑽進棉花裡
+      p.stay('sleep', (this.next - p.t) / 1000 + 3600, { inNest: true });
       p.flush();
       h.segs.push(...p.segs);
       return; // nextT 維持 Infinity：睡到明天
@@ -594,7 +617,7 @@ export class Sim {
     f.eatT0 = s.t0;
     f.eatenAt = s.t1;
     if (f.kind === 'kibble' && rnd(h.rng) < 0.5) {
-      p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.6);
+      p.goTo(NEST_SPOTS[h.idx % 3], NEST.level, 0.6);
       p.stay('stash', 3.5, { face: rr(h.rng, -0.8, 0.8) });
       p.stay('groom', 3);
     } else if (f.kind !== 'kibble') {
@@ -611,6 +634,9 @@ export class Sim {
     let pick = rnd(R) * ACT_TOTAL;
     let act = 'wander';
     for (const [name, w] of ACTS) { if ((pick -= w) < 0) { act = name; break; } }
+    // 籠子裡沒有的玩具就不能玩
+    const avail = { wheel: !!WHEEL, sand: !!SAND, tunnel: !!LOG, logTop: !!LOG, house: !!HOUSE, otherLevel: !!PLAT };
+    if (avail[act] === false) act = rnd(R) < 0.5 ? 'wander' : 'loaf';
     if (COOL[act] && t - (h.cool[act] ?? -1e15) < COOL[act]) act = 'wander';
     if (LOCKED.has(act) && !this.lockFree(act, t)) act = 'wander';
     if (COOL[act]) h.cool[act] = t;
@@ -690,19 +716,19 @@ export class Sim {
         break;
       }
       case 'house': {
-        p.goTo(P.houseDoor, 2, walk());
+        p.goTo(P.houseDoor, HOUSE.level, walk());
         p.stay('sniff', 1.5, { face: PI });
-        p.leg(P.houseIn, 'walk', 0.3, 'house', 2);
+        p.leg(P.houseIn, 'walk', 0.3, 'house', HOUSE.level);
         p.stay(rnd(R) < 0.5 ? 'loaf' : 'nap', rr(R, 15, 60), { face: 0 });
         p.stay('sit', rr(R, 2, 4), { face: 0 });
-        p.leg(P.houseDoor, 'walk', 0.35, 'floor2', 2);
+        p.leg(P.houseDoor, 'walk', 0.35, floorOf(HOUSE.level), HOUSE.level);
         break;
       }
       case 'nap': {
-        p.goTo(NEST_SPOTS[h.idx % 3], 2, 0.5);
+        p.goTo(NEST_SPOTS[h.idx % 3], NEST.level, 0.5);
         p.stay('groom', 2, { face: 0.5 });
-        p.stay('burrow', 3.5);
-        p.stay('nap', rr(R, 60, 240));
+        p.stay('burrow', 3.5, { inNest: true });
+        p.stay('nap', rr(R, 60, 240), { inNest: true });
         p.stay('stand', 2);
         p.stay('groom', 3);
         break;
@@ -765,7 +791,7 @@ export class Sim {
     }
     return {
       kind: s.kind, pos: { ...s.pos }, place: s.place, level: s.level, heading: s.face, speed: 0, slope: 0,
-      k: clamp((t - s.t0) / (s.t1 - s.t0 || 1), 0, 1), t0: s.t0, t1: s.t1, food: s.food, foodKind: s.foodKind,
+      k: clamp((t - s.t0) / (s.t1 - s.t0 || 1), 0, 1), t0: s.t0, t1: s.t1, food: s.food, foodKind: s.foodKind, inNest: !!s.inNest,
     };
   }
   foods() {
@@ -778,6 +804,7 @@ export class Sim {
     for (const id in this.st.poops) {
       const p = this.st.poops[id];
       if (p.appearAt == null || p.appearAt > t) continue;
+      if (p.appearAt < LAY.cageAt) continue; // 換新籠子＝大掃除
       const c = this.cleans?.get(id);
       out.push({ ...p, cleanedAt: c ?? null });
     }

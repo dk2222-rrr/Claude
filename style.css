@@ -133,6 +133,22 @@ img.photo { width: 100%; border-radius: 18px; box-shadow: var(--shadow); margin-
 .album img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; display: block; }
 .album figcaption { font-size: 10.5px; color: var(--muted); margin-top: 3px; text-align: center; }
 
+/* 商店 */
+.shop-top { display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 14px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
+.shop-top .pts b { color: #d0557a; font-size: 18px; }
+.shop { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.shop-item { display: flex; align-items: center; gap: 12px; background: #fff; border-radius: 16px; padding: 10px 12px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+.shop-item .emo { font-size: 30px; width: 40px; text-align: center; }
+.shop-item .info { flex: 1; min-width: 0; }
+.shop-item .name { font-weight: 700; font-size: 15px; }
+.shop-item .desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.shop-item .buy { padding: 8px 12px; border-radius: 12px; font-size: 14px; white-space: nowrap; }
+.shop-item .buy:disabled { opacity: .55; }
+.shop-item .owned { color: #4f9a68; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.shop-item .needs { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.shop-item.owned, .shop-item.needs { opacity: .75; }
+.hud-btns .icon-btn { width: 38px; height: 38px; font-size: 20px; }
+
 /* 顏色選擇 */
 .swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .swatch { display: flex !important; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px !important; cursor: pointer; }

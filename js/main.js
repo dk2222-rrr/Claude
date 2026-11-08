@@ -1,6 +1,8 @@
 import { World } from './world.js';
 import { Sim, hash, dayAnchor, isNight, nightStartBefore, poopSchedule, DAY, NIGHT_OFF, POOP_DAYS } from './sim.js';
 import { PALETTES } from './hamster.js';
+import { makeLayout } from './layout.js';
+import { SHOP, setupOf, shopState } from './shop.js';
 import { createBackend } from './sync.js';
 import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST, scoreOf, poopPenalty } from './state.js';
 
@@ -138,7 +140,9 @@ function mergedEvents() {
 function feedSim() {
   if (!room || !sim) return;
   world.setHamsters(hams());
-  sim.setInputs(hash(session.code), hams(), mergedEvents(), Date.now());
+  const L = makeLayout(setupOf(room));
+  world.setLayout(L);
+  sim.setInputs(hash(session.code), hams(), mergedEvents(), Date.now(), L);
   sim.advance(Date.now() + 30000);
   if (!firstEvents) settleOldPoops();
 }
@@ -152,7 +156,8 @@ function settleOldPoops() {
   let count = 0;
   for (const h of hams()) {
     if (h.addedAt >= day + NIGHT_OFF) continue;
-    count += poopSchedule(hash(session.code), h, day).filter((p) => !cleaned.has(p.id)).length;
+    const cageAt = setupOf(room).cageAt;
+    count += poopSchedule(hash(session.code), h, day).filter((p) => !cleaned.has(p.id) && p.t >= cageAt).length;
   }
   backend.act(session.code, 'settlePoops', { day, count, at: Date.now() });
 }
@@ -186,6 +191,16 @@ function onRoom(r) {
       burst(innerWidth / 2, innerHeight * 0.5, 18, ['💞', '💗', '💖', '✨']);
       toast(`💞 ${r.combo.names.join(' 和 ')} 一起摸摸！心情 +20`);
     }
+    const ps = setupOf(prev);
+    const ns = setupOf(r);
+    if (prev && (ps.cage !== ns.cage || ps.items.length !== ns.items.length)) {
+      const flash = $('#flash');
+      flash.classList.remove('go');
+      void flash.offsetWidth;
+      flash.classList.add('go');
+      const newItem = ps.cage !== ns.cage ? SHOP.find((x) => x.id === ns.cage) : SHOP.find((x) => x.id === ns.items[ns.items.length - 1]);
+      if (newItem) say(ps.cage !== ns.cage ? `哇！新家好大！🏡` : `哇！是新的${newItem.label}！`, 4);
+    }
     if (prev && Object.keys(prev.members).length < 2 && Object.keys(r.members).length === 2) {
       toast(`🎉 ${partner()?.name} 回家了！現在你們可以一起照顧${allNames()}`);
     }
@@ -209,6 +224,7 @@ function onEvents(list) {
       if (e.type === 'note') toast(`💌 ${e.byName} 傳話給你`);
       if (e.type === 'photo') toast(`📷 ${e.byName} 拍了一張照片（📒 相簿裡看得到）`);
       if (e.type === 'clean') toast(`🧹 ${e.byName} 撿了大便`);
+      if (e.type === 'buy') toast(`🎁 ${e.byName} 換了「${e.label}」放進籠子`);
     }
   }
   feedSim();
@@ -246,7 +262,7 @@ function render() {
 
 function renderScore() {
   const n = dirtyPoops().length;
-  $('#scoreText').textContent = `🏆 倉鼠分數 ${liveScore()}`;
+  $('#scoreText').textContent = `💝 好感度 ${liveScore()}`;
   $('#poopText').textContent = n ? `💩 ×${n}` : '✨ 乾淨';
   $('#poopText').classList.toggle('dirty', n > 0);
 }
@@ -442,7 +458,7 @@ async function cleanPoop(p, x, y) {
   burst(x, y, 4, ['✨', '🧹', '✨']);
   navigator.vibrate?.(15);
   const res = await sendEvent('clean', { pid: p.id, ageMs: Date.now() - p.appearAt });
-  if (res?.ok) toast(res.gain > 0 ? `🧹 撿起來丟掉了！倉鼠分數 +${res.gain}` : `🧹 撿起來了，但放太久了（${res.gain} 分）`);
+  if (res?.ok) toast(res.gain > 0 ? `🧹 撿起來丟掉了！好感度 +${res.gain}` : `🧹 撿起來了，但放太久了（好感度 ${res.gain}）`);
 }
 
 function pet(id, x, y) {
@@ -622,6 +638,38 @@ async function finishPhoto(src, w, h, mirror) {
   });
 }
 
+/* ---------------- 商店：用好感度換籠子和玩具 ---------------- */
+function openShop() {
+  const setup = setupOf(room);
+  const pts = liveScore();
+  const cageName = { small: '小籠子', medium: '中籠子', big: '雙層大籠子' }[setup.cage];
+  const rows = SHOP.map((it) => {
+    const st = shopState(it, setup);
+    let btn;
+    if (st === 'owned') btn = `<span class="owned">${it.type === 'cage' && it.id !== setup.cage ? '已升級' : '已擁有'} ✓</span>`;
+    else if (st === 'needs') btn = `<span class="needs">要先換${it.needs === 'medium' ? '中籠子' : '大籠子'}</span>`;
+    else btn = `<button class="${pts >= it.cost ? 'primary' : 'secondary'} buy" data-buy="${it.id}" ${pts >= it.cost ? '' : 'disabled'}>💝 ${it.cost}</button>`;
+    return `<li class="shop-item ${st}"><b class="emo">${it.emoji}</b><div class="info"><div class="name">${it.label}</div><div class="desc">${it.desc}</div></div>${btn}</li>`;
+  }).join('');
+  openSheet(`
+    <h3>🛒 倉鼠商店</h3>
+    <div class="shop-top"><span>現在住：<b>${cageName}</b></span><span class="pts">💝 好感度 <b>${pts}</b></span></div>
+    <ul class="shop">${rows}</ul>
+    <p class="mode-note">摸摸、餵食、撿大便、拍照都會增加好感度；大便放太久會減少。<br>換來的東西兩個人一起用，另一支手機也會馬上看到。</p>`);
+  document.querySelectorAll('[data-buy]').forEach((b) => b.addEventListener('click', async () => {
+    const it = SHOP.find((x) => x.id === b.dataset.buy);
+    if (!confirm(`用 ${it.cost} 好感度換「${it.label}」？`)) return;
+    b.disabled = true;
+    const res = await backend.act(session.code, 'buy', { item: it.id, at: Date.now() });
+    if (res?.ok) { closeSheet(); toast(`🎁 「${it.label}」放進籠子了！`); }
+    else {
+      toast(res?.reason === 'points' ? '好感度不夠，再多照顧牠們一下吧 💝' : '現在不能換這個喔');
+      b.disabled = false;
+    }
+  }));
+}
+$('#btnShop').addEventListener('click', () => room && openShop());
+
 /* ---------------- 抽屜：傳話 / 紀錄 / 設定 ---------------- */
 function openSheet(html) {
   $('#sheetBody').innerHTML = html;
@@ -656,7 +704,8 @@ const EV_TEXT = {
   note: (e) => `💌 ${e.byName}：「${e.text}」`,
   photo: (e) => `📷 ${e.byName} 拍了照片`,
   adopt: (e) => `🐹 ${e.byName} 帶 ${e.name} 回家`,
-  settle: (e) => `😢 有 ${e.count} 坨大便放了 3 天都沒撿，倉鼠分數 -${e.count * 5}`,
+  settle: (e) => `😢 有 ${e.count} 坨大便放了 3 天都沒撿，好感度 -${e.count * 5}`,
+  buy: (e) => `🛒 ${e.byName} 換了「${e.label || e.item}」`,
 };
 function fmtTime(at) {
   const d = new Date(at);
