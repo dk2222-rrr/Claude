@@ -454,58 +454,117 @@ function bindTray() {
   window.addEventListener('pointercancel', finish);
 }
 
-/* ---------------- 拍照 ---------------- */
-$('#btnPhoto').addEventListener('click', async () => {
-  if (!room) return;
+/* ---------------- 拍照：用手機相機拍一張＝1 點，可以換零食 ---------------- */
+let camStream = null;
+let camFacing = 'user';
+function stopCam() {
+  camStream?.getTracks().forEach((t) => t.stop());
+  camStream = null;
+}
+
+$('#btnPhoto').addEventListener('click', () => room && openCamera());
+
+async function openCamera() {
+  stopCam();
+  openSheet(`
+    <h3>📷 拍一張照片</h3>
+    <p class="muted" style="text-align:left">拍你們的日常、自拍、今天吃的東西都可以～每拍 1 張得 1 點，可以換零食給倉鼠。</p>
+    <div class="cam-wrap"><video id="camVideo" autoplay playsinline muted></video><div id="camMsg" class="cam-msg">相機開啟中…</div></div>
+    <div class="cam-ctrl">
+      <button class="secondary" id="camFlip" aria-label="切換鏡頭">🔄</button>
+      <button class="shutter" id="camShot" aria-label="拍照"></button>
+      <button class="secondary" id="camPick" aria-label="用系統相機">📱</button>
+    </div>
+    <input type="file" id="camFile" accept="image/*" capture="user" hidden />
+    <p class="mode-note">🌻 葵花籽＝1 張照片　🐟 小魚乾＝2 張照片　｜ 目前有 ${room.photos || 0} 張</p>`);
+  $('#camFlip').addEventListener('click', () => { camFacing = camFacing === 'user' ? 'environment' : 'user'; startStream(); });
+  $('#camShot').addEventListener('click', shoot);
+  $('#camPick').addEventListener('click', () => { $('#camFile').setAttribute('capture', camFacing); $('#camFile').click(); });
+  $('#camFile').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const img = await new Promise((r, j) => { const i = new Image(); i.onload = () => r(i); i.onerror = j; i.src = URL.createObjectURL(file); });
+    finishPhoto(img, img.naturalWidth, img.naturalHeight, false);
+  });
+  startStream();
+}
+
+async function startStream() {
+  stopCam();
+  const v = $('#camVideo');
+  if (!v) return;
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: camFacing, width: { ideal: 1440 }, height: { ideal: 1920 } }, audio: false });
+    if (!$('#camVideo')) { stopCam(); return; }
+    v.srcObject = camStream;
+    v.classList.toggle('mirror', camFacing === 'user');
+    $('#camMsg').classList.add('hidden');
+  } catch (err) {
+    // 沒有權限或不支援 → 改用系統相機
+    $('#camMsg').innerHTML = '沒辦法直接開相機<br>按右下 📱 用手機相機拍';
+  }
+}
+
+function shoot() {
+  const v = $('#camVideo');
+  if (!v || !camStream || !v.videoWidth) { $('#camPick')?.click(); return; }
+  finishPhoto(v, v.videoWidth, v.videoHeight, camFacing === 'user');
+}
+
+async function finishPhoto(src, w, h, mirror) {
   const flash = $('#flash');
   flash.classList.remove('go');
   void flash.offsetWidth;
   flash.classList.add('go');
-  const src = world.capture();
-  const img = await new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = src; });
+  navigator.vibrate?.(30);
+  // 縮到最長邊 1600，加上日期小字
+  const k = Math.min(1, 1600 / Math.max(w, h));
   const c = document.createElement('canvas');
-  c.width = img.width;
-  c.height = img.height;
+  c.width = Math.round(w * k);
+  c.height = Math.round(h * k);
   const g = c.getContext('2d');
-  g.drawImage(img, 0, 0);
+  if (mirror) { g.translate(c.width, 0); g.scale(-1, 1); }
+  g.drawImage(src, 0, 0, c.width, c.height);
+  g.setTransform(1, 0, 0, 1, 0, 0);
   const s = c.width / 400;
-  g.font = `600 ${14 * s}px -apple-system, "PingFang TC", sans-serif`;
-  g.fillStyle = 'rgba(255,255,255,0.85)';
   const d = new Date();
-  const label = `🐹 ${allNames()} · ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
-  g.fillText(label, 14 * s, c.height - 16 * s);
+  g.font = `600 ${13 * s}px -apple-system, "PingFang TC", sans-serif`;
+  g.fillStyle = 'rgba(255,255,255,0.9)';
+  g.shadowColor = 'rgba(0,0,0,0.35)';
+  g.shadowBlur = 4 * s;
+  g.fillText(`🐹 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} · 一起養倉鼠`, 12 * s, c.height - 14 * s);
   const url = c.toDataURL('image/jpeg', 0.9);
+  stopCam();
 
-  const visible = world.visibleHamsters().length > 0;
-  const counts = visible && Date.now() - lastPhotoAt > 4000;
-  let gained = '';
-  if (counts) {
+  let gained = '太快了，隔幾秒再拍才算數喔';
+  if (Date.now() - lastPhotoAt > 3000) {
     lastPhotoAt = Date.now();
     const res = await backend.act(session.code, 'photo', { at: Date.now() });
-    if (res?.ok) gained = `📷 +1（現在有 ${res.photos} 張，可以換零食）`;
+    if (res?.ok) gained = `📷 +1！現在有 ${res.photos} 張，可以換零食了`;
   }
   openSheet(`
     <h3>📸 拍好了！</h3>
     <img class="photo" src="${url}" alt="照片" />
-    <p class="muted">${gained || (visible ? '太快了，等一下再拍才算數喔' : '要拍到倉鼠才能換零食喔')}</p>
-    <div class="row"><button class="primary" id="savePhoto">儲存／分享</button></div>
-    <p class="mode-note">🌻 葵花籽＝1 張照片　🐟 小魚乾＝2 張照片</p>`);
+    <p class="muted">${gained}</p>
+    <div class="row"><button class="secondary" id="again">再拍一張</button><button class="primary" id="savePhoto">儲存／分享</button></div>
+    <p class="mode-note">把零食從下面拖進籠子：🌻 葵花籽 1 張　🐟 小魚乾 2 張</p>`);
+  $('#again').addEventListener('click', openCamera);
   $('#savePhoto').addEventListener('click', async () => {
     const blob = await (await fetch(url)).blob();
-    const file = new File([blob], `hamster-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    const file = new File([blob], `photo-${Date.now()}.jpg`, { type: 'image/jpeg' });
     try {
       if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });
       else { const a = document.createElement('a'); a.href = url; a.download = file.name; a.click(); }
     } catch {}
   });
-});
+}
 
 /* ---------------- 抽屜：傳話 / 紀錄 / 設定 ---------------- */
 function openSheet(html) {
   $('#sheetBody').innerHTML = html;
   $('#sheet').classList.remove('hidden');
 }
-function closeSheet() { $('#sheet').classList.add('hidden'); }
+function closeSheet() { stopCam(); $('#sheet').classList.add('hidden'); }
 $('#sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet' || e.target.closest('.sheet-close')) closeSheet(); });
 
 $('#btnNote').addEventListener('click', () => {
