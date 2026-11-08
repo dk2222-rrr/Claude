@@ -1,0 +1,14 @@
+{
+  "name": "搶票雷達",
+  "short_name": "搶票雷達",
+  "description": "關注歌手與樂團，演唱會、活動、搶票開賣即時通知",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14111f",
+  "theme_color": "#14111f",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

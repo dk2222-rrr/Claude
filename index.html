@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>搶票雷達</title>
+  <meta name="description" content="關注歌手與樂團，演唱會、活動、搶票開賣即時通知">
+  <meta name="theme-color" content="#14111f">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icon.svg" alt=""><span>搶票雷達</span></div>
+    <button id="checkNow" class="btn small" title="立即檢查">↻ 檢查</button>
+  </header>
+  <div id="status" class="status"></div>
+
+  <main>
+    <!-- 搜尋 -->
+    <section id="tab-search" class="tab active">
+      <form id="searchForm" class="search">
+        <input id="q" type="search" placeholder="搜尋歌手或樂團，例如：五月天、Coldplay" autocomplete="off">
+        <button class="btn primary">搜尋</button>
+      </form>
+      <div id="results"></div>
+      <h3 class="label">熱門推薦</h3>
+      <div id="popular" class="chips"></div>
+    </section>
+
+    <!-- 關注名單 -->
+    <section id="tab-watch" class="tab">
+      <h2>我的關注 <span id="watchCount" class="muted"></span></h2>
+      <p class="hint">「別名」可加上英文名稱（例如 五月天 → Mayday），讓國外售票系統也找得到。</p>
+      <div id="watchlist"></div>
+    </section>
+
+    <!-- 近期活動 -->
+    <section id="tab-events" class="tab">
+      <h2>近期活動</h2>
+      <div class="chips" id="eventFilter"></div>
+      <div id="events"></div>
+    </section>
+
+    <!-- 搶票提醒 -->
+    <section id="tab-remind" class="tab">
+      <h2>搶票提醒</h2>
+      <details class="card" id="addRemindBox">
+        <summary>＋ 手動新增搶票時間（拓元、KKTIX、ibon…）</summary>
+        <form id="remindForm" class="form">
+          <label>歌手／樂團<input name="artist" list="artistOptions" required></label>
+          <datalist id="artistOptions"></datalist>
+          <label>活動名稱<input name="title" required placeholder="例如：2026 巡迴演唱會 台北站"></label>
+          <label>開賣時間<input name="saleAt" type="datetime-local" required></label>
+          <label>類型<input name="kind" placeholder="例如：全面開賣、會員預售" value="開賣"></label>
+          <label>售票連結（選填）<input name="url" type="url" placeholder="https://"></label>
+          <button class="btn primary">新增提醒</button>
+        </form>
+      </details>
+      <div id="reminders"></div>
+    </section>
+
+    <!-- 設定 -->
+    <section id="tab-settings" class="tab">
+      <h2>設定</h2>
+      <div class="card">
+        <h3>通知</h3>
+        <p id="notifState" class="muted"></p>
+        <div class="row">
+          <button id="enableNotif" class="btn primary">開啟通知</button>
+          <button id="testNotif" class="btn">測試通知</button>
+        </div>
+        <h4>搶票前提醒時間</h4>
+        <div id="offsets" class="checks"></div>
+        <label class="check"><input type="checkbox" id="autoRemind"> 找到開賣／預售時間時自動建立提醒</label>
+      </div>
+
+      <div class="card">
+        <h3>資料來源</h3>
+        <p class="hint">要自動抓演唱會資料，請至少填一個免費 API key（填好按「儲存」）。</p>
+        <form id="settingsForm" class="form">
+          <label>Ticketmaster API Key
+            <input name="tmKey" autocomplete="off" placeholder="developer.ticketmaster.com 免費申請">
+          </label>
+          <label>Bandsintown app_id
+            <input name="bitAppId" autocomplete="off" placeholder="向 Bandsintown 申請的 app_id">
+          </label>
+          <label>地區
+            <select name="country">
+              <option value="">全部地區</option>
+              <option value="TW">台灣</option><option value="JP">日本</option>
+              <option value="HK">香港</option><option value="KR">韓國</option>
+              <option value="SG">新加坡</option><option value="MY">馬來西亞</option>
+              <option value="TH">泰國</option><option value="US">美國</option>
+              <option value="GB">英國</option>
+            </select>
+          </label>
+          <label>自動檢查頻率（App 開著時）
+            <select name="checkEvery">
+              <option value="30">每 30 分鐘</option><option value="60">每 1 小時</option>
+              <option value="180">每 3 小時</option><option value="360">每 6 小時</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" name="demo"> 範例模式（沒有 API key 也能先體驗，資料為假）</label>
+          <button class="btn primary">儲存</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>備份</h3>
+        <div class="row">
+          <button id="exportBtn" class="btn">匯出關注名單</button>
+          <label class="btn">匯入<input id="importFile" type="file" accept="application/json" hidden></label>
+        </div>
+      </div>
+      <p class="hint" id="lastCheck"></p>
+    </section>
+  </main>
+
+  <nav class="tabs">
+    <button data-tab="search" class="active"><span>🔍</span>搜尋</button>
+    <button data-tab="watch"><span>⭐</span>關注</button>
+    <button data-tab="events"><span>🎤</span>活動<b id="evBadge" class="badge" hidden></b></button>
+    <button data-tab="remind"><span>⏰</span>提醒</button>
+    <button data-tab="settings"><span>⚙️</span>設定</button>
+  </nav>
+  <div id="toasts"></div>
+
+  <script src="js/store.js"></script>
+  <script src="js/sources.js"></script>
+  <script src="js/checker.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
