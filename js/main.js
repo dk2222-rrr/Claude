@@ -373,7 +373,7 @@ function positionBubble() {
   if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
   el.className = cls;
   el.style.left = `${Math.max(90, Math.min(innerWidth - 90, p.x))}px`;
-  el.style.top = `${Math.max(!$('#banner').classList.contains('hidden') ? 285 : 235, p.y)}px`;
+  el.style.top = `${Math.max($('#hud').getBoundingClientRect().bottom + 50, p.y)}px`;
 }
 $('#bubble').addEventListener('click', () => {
   const n = unreadNote();

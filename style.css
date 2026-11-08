@@ -49,10 +49,8 @@ h1 { font-size: 22px; margin: 0; letter-spacing: 1px; }
 .level span { white-space: nowrap; font-weight: 600; color: #6d8fc4; }
 
 #banner {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  top: calc(188px + var(--safe-top)); padding: 8px 16px; border-radius: 999px;
-  background: linear-gradient(90deg, #ffd1dc, #ffe6b3); font-size: 14px; font-weight: 600;
-  box-shadow: var(--shadow); white-space: nowrap; animation: pop .5s ease;
+  margin-top: 8px; padding: 5px 12px; border-radius: 999px; text-align: center;
+  background: linear-gradient(90deg, #ffd1dc, #ffe6b3); font-size: 12.5px; font-weight: 600;
 }
 
 .care-hint {
@@ -198,7 +196,6 @@ body.night .care-hint, body.night .gesture-hint { color: #cfc8e6; }
 .heart { position: absolute; font-size: 26px; animation: float 1.2s ease-out forwards; }
 
 @keyframes pop { from { transform: translate(-50%, -100%) scale(.6); opacity: 0; } }
-#banner { animation-name: popc; }
 @keyframes popc { from { transform: translateX(-50%) scale(.6); opacity: 0; } }
 @keyframes toast { 0% { opacity: 0; transform: translateY(-8px); } 10%, 85% { opacity: 1; transform: none; } 100% { opacity: 0; } }
 @keyframes float {
