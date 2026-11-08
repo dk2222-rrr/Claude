@@ -3,7 +3,7 @@
 //   二樓：木平台＋小木屋＋棉花窩（木梯斜坡上下樓）
 import * as THREE from 'three';
 import { Hamster } from './hamster.js';
-import { W, WHEEL, SAND, BOWL, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS, levelY } from './layout.js';
+import { W, WHEEL, SAND, BOWL, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS, CAGE_TOP, levelY } from './layout.js';
 import { HIDDEN_PLACES } from './sim.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -153,6 +153,7 @@ export class World {
 
     this.buildRoom();
     this.buildBase();
+    this.buildBars();
     this.buildWheel();
     this.buildSandBath();
     this.buildBowl();
@@ -164,6 +165,7 @@ export class World {
     this.rigs = {}; // hid → { ham, contact }
     this.infos = {}; // hid → { name, color }
     this.foodMeshes = {};
+    this.poopMeshes = {};
     this.marker = new THREE.Mesh(new THREE.RingGeometry(0.06, 0.085, 32), new THREE.MeshBasicMaterial({ color: 0x5fcf8e, transparent: true, opacity: 0.85, depthTest: false }));
     this.marker.rotation.x = -Math.PI / 2;
     this.marker.renderOrder = 10;
@@ -242,6 +244,45 @@ export class World {
     }
     bits.receiveShadow = true;
     s.add(bits);
+  }
+
+  // 鐵籠：只有後面和左右兩側；正對鏡頭的前面是開的。轉到側面看時，擋住視線的那面會變淡。
+  buildBars() {
+    const s = this.scene;
+    const { x: X, z: Z, baseTop: T } = W;
+    const top = CAGE_TOP;
+    const len = top - T;
+    const geo = new THREE.CylinderGeometry(0.008, 0.008, len, 5);
+    const gap = 0.09;
+    this.walls = [];
+    const wall = (pts, normal, railA, railB) => {
+      const mat = std(0xf4f4f4, { roughness: 0.25, metalness: 0.35, transparent: true, opacity: 1 });
+      const g = new THREE.Group();
+      const im = new THREE.InstancedMesh(geo, mat, pts.length);
+      const m = new THREE.Matrix4();
+      pts.forEach(([x, z], i) => im.setMatrixAt(i, m.makeTranslation(x, T + len / 2, z)));
+      im.castShadow = true;
+      g.add(im);
+      const rl = Math.hypot(railB[0] - railA[0], railB[1] - railA[1]);
+      [T + 0.04, top - 0.55, top].forEach((y) => {
+        const r = mesh(new THREE.BoxGeometry(rl + 0.03, 0.025, 0.025), mat, (railA[0] + railB[0]) / 2, y, (railA[1] + railB[1]) / 2);
+        r.rotation.y = Math.atan2(railB[1] - railA[1], railB[0] - railA[0]) * -1;
+        g.add(r);
+      });
+      s.add(g);
+      this.walls.push({ mat, normal: new THREE.Vector3(...normal) });
+    };
+    const back = [];
+    for (let x = -X; x <= X + 1e-3; x += gap) back.push([x, -Z - 0.02]);
+    wall(back, [0, 0, -1], [-X - 0.02, -Z - 0.02], [X + 0.02, -Z - 0.02]);
+    const left = [];
+    const right = [];
+    for (let z = -Z + gap; z <= Z + 1e-3; z += gap) { left.push([-X - 0.02, z]); right.push([X + 0.02, z]); }
+    wall(left, [-1, 0, 0], [-X - 0.02, -Z - 0.02], [-X - 0.02, Z + 0.02]);
+    wall(right, [1, 0, 0], [X + 0.02, -Z - 0.02], [X + 0.02, Z + 0.02]);
+    // 四根角柱
+    const postMat = std(0xffffff, { roughness: 0.3, metalness: 0.4 });
+    [[-X, -Z], [X, -Z]].forEach(([x, z]) => s.add(mesh(new THREE.BoxGeometry(0.035, len, 0.035), postMat, x + Math.sign(x) * 0.02, T + len / 2, z - 0.02)));
   }
 
   buildWheel() {
@@ -480,6 +521,57 @@ export class World {
       this.rigs[id] = { ham, contact, pose: null };
     }
     return this.rigs[id];
+  }
+
+  updatePoops(now) {
+    const seen = new Set();
+    for (const p of this.sim.poopsAt(now)) {
+      if (p.cleanedAt && now > p.cleanedAt + 700) continue;
+      seen.add(p.id);
+      let m = this.poopMeshes[p.id];
+      if (!m) {
+        m = new THREE.Group();
+        const mat = std(0x5b3b24, { roughness: 0.55 });
+        [[0, 0, 0, 0.2], [0.035, 0, 0.018, 1.4], [-0.012, 0.012, -0.03, 2.3]].forEach(([x, y, z, r], i) => {
+          const pel = mesh(new THREE.SphereGeometry(1, 12, 8), mat, x, 0.013 + y, z);
+          pel.scale.set(0.016, 0.013, 0.034);
+          pel.rotation.y = r;
+          if (i === 2 && (p.rot || 0) > 3) pel.visible = false;
+          m.add(pel);
+        });
+        m.rotation.y = p.rot || 0;
+        this.scene.add(m);
+        this.poopMeshes[p.id] = m;
+      }
+      m.userData.poop = p;
+      m.position.set(p.x, p.y, p.z);
+      const pop = clamp((now - p.appearAt) / 300, 0, 1);
+      m.scale.setScalar(pop);
+      if (p.cleanedAt && now >= p.cleanedAt) {
+        // 撿起來：往上飛、變小
+        const k = clamp((now - p.cleanedAt) / 700, 0, 1);
+        m.position.y += k * 0.6;
+        m.scale.setScalar(Math.max(0.01, 1 - k));
+      }
+    }
+    for (const id in this.poopMeshes) {
+      if (!seen.has(id)) {
+        this.scene.remove(this.poopMeshes[id]);
+        delete this.poopMeshes[id];
+      }
+    }
+  }
+  pickPoop(clientX, clientY, now = Date.now()) {
+    let best = null;
+    let bestD = 38;
+    for (const id in this.poopMeshes) {
+      const p = this.poopMeshes[id].userData.poop;
+      if (!p || (p.cleanedAt && p.cleanedAt <= now)) continue;
+      const c = this.toScreen(this._v.set(p.x, p.y + 0.02, p.z));
+      const d = Math.hypot(c.x - clientX, c.y - clientY);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
   }
 
   updateFoods(now) {
@@ -723,6 +815,15 @@ export class World {
     this.pMesh.instanceMatrix.needsUpdate = true;
 
     this.updateFoods(now);
+    this.updatePoops(now);
+    // 轉到側面時，擋在鏡頭前的那面鐵籠變淡
+    const cd = this._v.set(this.camera.position.x, 0, this.camera.position.z).normalize();
+    for (const w of this.walls) {
+      const facing = w.normal.dot(cd);
+      const target = 1 - ss(0.2, 0.5, facing) * 0.92;
+      w.mat.opacity += (target - w.mat.opacity) * Math.min(1, dt * 8);
+      w.mat.depthWrite = w.mat.opacity > 0.95;
+    }
     this.renderer.render(this.scene, this.camera);
     this.onFrame?.(now);
   }

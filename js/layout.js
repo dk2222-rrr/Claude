@@ -27,4 +27,8 @@ export const BOUNDS = {
   2: { x0: PLAT.x0 + 0.14, x1: PLAT.x1 - 0.14, z0: PLAT.z0 + 0.14, z1: PLAT.z1 - 0.1, y: PLAT.y },
 };
 
+// 倉鼠習慣固定上廁所的角落（一樓左前方）
+export const TOILET = { x0: -1.58, x1: -1.02, z0: 0.76, z1: 0.95 };
+export const CAGE_TOP = 2.3;
+
 export const levelY = (lvl) => (lvl === 2 ? PLAT.y : 0);

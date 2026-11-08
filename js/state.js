@@ -60,11 +60,17 @@ export function newRoom({ dogName, anniversary, myName, color }, uid) {
     note: null,
     petLog: {},
     photos: 1,
+    score: SCORE_START,
     hamsters: [{ id: 'h1', name: dogName, color: color || 'golden', addedAt: now }],
   };
 }
 
 export const MAX_HAMSTERS = 3;
+// 倉鼠分數：照顧得好會加分，大便放著不撿會扣分（未來可以拿來升級籠子／玩具）
+export const SCORE_START = 100;
+export const POOP_PENALTY_MAX = 10; // 一坨大便最多扣 10 分（每放 1 小時扣 1 分）
+export const poopPenalty = (ageMs) => Math.min(POOP_PENALTY_MAX, Math.floor(Math.max(0, ageMs) / 3600e3));
+export const scoreOf = (room) => (room?.score ?? SCORE_START);
 export const SNACK_COST = { kibble: 0, seed: 1, fish: 2 };
 
 // 舊資料沒有 hamsters 欄位時，用原本的名字補一隻
@@ -96,9 +102,12 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       const cost = SNACK_COST[kind];
       if ((r.photos || 0) < cost) return { result: { ok: false, reason: 'photos' } };
       r.photos = (r.photos || 0) - cost;
+      const before = d.fullness;
       if (kind === 'kibble') { d.fullness = clamp(d.fullness + 24 / n); d.love += 1; }
       if (kind === 'seed') { d.fullness = clamp(d.fullness + 6 / n); d.joy = clamp(d.joy + 10); d.love += 2; }
       if (kind === 'fish') { d.fullness = clamp(d.fullness + 10 / n); d.joy = clamp(d.joy + 18); d.love += 3; }
+      // 餓的時候餵才加分（一直狂丟不會一直加）
+      if (before < 85 || kind !== 'kibble') r.score = scoreOf(r) + (kind === 'kibble' ? 1 : 2);
       const { x, y, z, level } = extra;
       return { room: r, event: ev('drop', { kind, x, y, z, level }), result: { ok: true } };
     }
@@ -111,6 +120,7 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
         d.joy = clamp(d.joy + 20);
         d.love += 5;
         r.combo = { at: now, names: [lp.byName, me] };
+        r.score = scoreOf(r) + 2;
       }
       const prev = (r.petLog || {})[uid] || 0;
       if (now - prev > 60000) {
@@ -127,7 +137,8 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
 
     case 'photo': {
       r.photos = Math.min(99, (r.photos || 0) + 1);
-      return { room: r, event: ev('photo'), result: { ok: true, photos: r.photos } };
+      r.score = scoreOf(r) + 1;
+      return { room: r, event: ev('photo', { photoId: extra.photoId || null }), result: { ok: true, photos: r.photos } };
     }
 
     case 'adopt': {
@@ -145,6 +156,25 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       r.hamsters = list;
       if (list[0]) d.name = list[0].name;
       return { room: r, result: { ok: true } };
+    }
+
+    // 撿大便：越早撿越好，放太久會倒扣
+    case 'clean': {
+      const done = r.cleaned || [];
+      if (done.includes(extra.pid)) return { result: { ok: false, reason: 'already' } };
+      const gain = 2 - poopPenalty(extra.ageMs || 0);
+      r.score = scoreOf(r) + gain;
+      r.cleaned = [...done, extra.pid].slice(-150);
+      return { room: r, event: ev('clean', { pid: extra.pid, gain }), result: { ok: true, gain } };
+    }
+
+    // 放超過 3 天都沒人撿的大便：結算扣分（每天只結算一次）
+    case 'settlePoops': {
+      if ((r.settledTo || 0) >= extra.day) return { result: { ok: false } };
+      r.settledTo = extra.day;
+      if (!extra.count) return { room: r, result: { ok: true } };
+      r.score = scoreOf(r) - extra.count * POOP_PENALTY_MAX;
+      return { room: r, event: ev('settle', { count: extra.count }), result: { ok: true } };
     }
 
     case 'note': {

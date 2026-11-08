@@ -1,8 +1,8 @@
 import { World } from './world.js';
-import { Sim, hash, dayAnchor, isNight, nightStartBefore } from './sim.js';
+import { Sim, hash, dayAnchor, isNight, nightStartBefore, poopSchedule, DAY, NIGHT_OFF, POOP_DAYS } from './sim.js';
 import { PALETTES } from './hamster.js';
 import { createBackend } from './sync.js';
-import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST } from './state.js';
+import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST, scoreOf, poopPenalty } from './state.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -30,6 +30,8 @@ let lastPhotoAt = 0;
 let tempBubble = null;
 let nextChatter = 0;
 let focusId = null; // 對話泡泡跟著哪一隻
+let settleTried = 0;
+let photoCache = [];
 
 /* ---------------- 啟動 ---------------- */
 async function boot() {
@@ -109,12 +111,13 @@ function enterHome(justCreated = false) {
   if (justCreated) setTimeout(() => openSettings(true), 600);
 }
 
-// 只需要「昨晚 21:00 之後」的事件：模擬每天早上 8:00 從窩裡重新開始
+// 模擬每天早上 8:00 從窩裡重新開始；大便最多留 3 天，所以抓最近 3 天的事件（看誰撿了哪坨）
 function subscribe() {
   unsub?.();
   subAnchor = dayAnchor(Date.now());
   serverEvents = [];
-  unsub = backend.subscribe(session.code, onRoom, onEvents, nightStartBefore(subAnchor) - 60000);
+  settleTried = 0;
+  unsub = backend.subscribe(session.code, onRoom, onEvents, subAnchor - POOP_DAYS * DAY);
 }
 
 /* ---------------- 資料更新 ---------------- */
@@ -137,6 +140,29 @@ function feedSim() {
   world.setHamsters(hams());
   sim.setInputs(hash(session.code), hams(), mergedEvents(), Date.now());
   sim.advance(Date.now() + 30000);
+  if (!firstEvents) settleOldPoops();
+}
+
+// 3 天前沒撿的大便：結算扣分（每天只做一次，兩支手機誰先算都一樣）
+function settleOldPoops() {
+  const day = sim.A - POOP_DAYS * DAY;
+  if (settleTried === day || (room.settledTo || 0) >= day) return;
+  settleTried = day;
+  const cleaned = new Set([...(room.cleaned || []), ...mergedEvents().filter((e) => e.type === 'clean').map((e) => e.pid)]);
+  let count = 0;
+  for (const h of hams()) {
+    if (h.addedAt >= day + NIGHT_OFF) continue;
+    count += poopSchedule(hash(session.code), h, day).filter((p) => !cleaned.has(p.id)).length;
+  }
+  backend.act(session.code, 'settlePoops', { day, count, at: Date.now() });
+}
+
+// 現在籠子裡沒撿的大便
+function dirtyPoops(now = Date.now()) {
+  return sim?.ready ? sim.poopsAt(now).filter((p) => !p.cleanedAt || p.cleanedAt > now) : [];
+}
+function liveScore(now = Date.now()) {
+  return scoreOf(room) - dirtyPoops(now).reduce((s, p) => s + poopPenalty(now - p.appearAt), 0);
 }
 
 function onRoom(r) {
@@ -181,7 +207,8 @@ function onEvents(list) {
       if (e.type === 'drop') toast(`${FOOD_EMOJI[e.kind]} ${e.byName} 放了${FOOD_LABEL[e.kind]}`);
       if (e.type === 'adopt') toast(`🐹 ${e.byName} 帶 ${e.name} 回家了！`);
       if (e.type === 'note') toast(`💌 ${e.byName} 傳話給你`);
-      if (e.type === 'photo') toast(`📷 ${e.byName} 拍了一張照片`);
+      if (e.type === 'photo') toast(`📷 ${e.byName} 拍了一張照片（📒 相簿裡看得到）`);
+      if (e.type === 'clean') toast(`🧹 ${e.byName} 撿了大便`);
     }
   }
   feedSim();
@@ -200,6 +227,7 @@ function render() {
   $('#levelText').textContent = `Lv.${lv.level} ${lv.title}`;
   $('#barLove').style.width = `${Math.round(lv.progress * 100)}%`;
   $('#photoCount').textContent = room.photos || 0;
+  renderScore();
   document.querySelectorAll('.tray-item').forEach((el) => {
     el.classList.toggle('locked', (room.photos || 0) < SNACK_COST[el.dataset.kind]);
   });
@@ -216,6 +244,13 @@ function render() {
   $('#careHint').textContent = careHint();
 }
 
+function renderScore() {
+  const n = dirtyPoops().length;
+  $('#scoreText').textContent = `🏆 倉鼠分數 ${liveScore()}`;
+  $('#poopText').textContent = n ? `💩 ×${n}` : '✨ 乾淨';
+  $('#poopText').classList.toggle('dirty', n > 0);
+}
+
 function setBar(sel, v) {
   const el = $(sel);
   el.style.width = `${Math.max(3, v)}%`;
@@ -225,7 +260,7 @@ function setBar(sel, v) {
 function todayTally() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const t = {};
-  Object.keys(room.members).forEach((id) => (t[id] = { kibble: 0, seed: 0, fish: 0, pet: 0, photo: 0, note: 0, total: 0 }));
+  Object.keys(room.members).forEach((id) => (t[id] = { kibble: 0, seed: 0, fish: 0, pet: 0, photo: 0, note: 0, clean: 0, total: 0 }));
   mergedEvents().filter((e) => e.at >= start.getTime()).forEach((e) => {
     const x = t[e.by];
     if (!x) return;
@@ -237,6 +272,8 @@ function todayTally() {
 }
 
 function careHint() {
+  const n = dirtyPoops().length;
+  if (n) return `籠子裡有 ${n} 坨大便 💩 點一下就能撿起來（放越久扣越多分）`;
   const p = partner();
   if (!p) return '把家庭碼傳給另一半，一起養吧 ✨（⚙️ 設定裡）';
   const t = todayTally();
@@ -249,6 +286,7 @@ function careHint() {
 }
 
 let lastRender = 0;
+let lastScore = 0;
 let lastAnchorCheck = 0;
 function onFrame(now) {
   if (now - lastAnchorCheck > 1000) {
@@ -257,6 +295,7 @@ function onFrame(now) {
     if (sim?.ready && dayAnchor(now) !== sim.A) feedSim();
   }
   if (now - lastRender > 5000) { lastRender = now; render(); }
+  else if (now - (lastScore || 0) > 500) { lastScore = now; if (room) { renderScore(); $('#careHint').textContent = careHint(); } }
   positionBubble(now);
 }
 
@@ -301,7 +340,8 @@ function positionBubble() {
     html = 'Zzz… 💤';
     cls += ' sleep';
   } else if (!hidden && pose) {
-    if (mood === 'hungry') html = '肚子好餓… 🥣';
+    if (dirtyPoops().length >= 3) html = '好臭喔…幫我清一下 💩';
+    else if (mood === 'hungry') html = '肚子好餓… 🥣';
     else if (mood === 'sad') html = '好想你們… 摸摸我嘛 🥺';
     else if (now > nextChatter) {
       nextChatter = now + 14000 + Math.random() * 18000;
@@ -315,7 +355,7 @@ function positionBubble() {
   if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
   el.className = cls;
   el.style.left = `${Math.max(90, Math.min(innerWidth - 90, p.x))}px`;
-  el.style.top = `${Math.max(!$('#banner').classList.contains('hidden') ? 250 : 200, p.y)}px`;
+  el.style.top = `${Math.max(!$('#banner').classList.contains('hidden') ? 285 : 235, p.y)}px`;
 }
 $('#bubble').addEventListener('click', () => {
   const n = unreadNote();
@@ -382,7 +422,9 @@ function bindScene() {
   const end = (e) => {
     ptrs.delete(e.pointerId);
     if (g?.type === 'pending' && performance.now() - g.t < 500) {
-      if (g.ham) pet(g.ham, e.clientX, e.clientY);
+      const poop = world.pickPoop(e.clientX, e.clientY);
+      if (poop) cleanPoop(poop, e.clientX, e.clientY);
+      else if (g.ham) pet(g.ham, e.clientX, e.clientY);
       else {
         if (performance.now() - lastTap < 320) world.resetView();
         lastTap = performance.now();
@@ -394,6 +436,13 @@ function bindScene() {
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); world.zoom(Math.exp(e.deltaY * 0.0012)); }, { passive: false });
+}
+
+async function cleanPoop(p, x, y) {
+  burst(x, y, 4, ['✨', '🧹', '✨']);
+  navigator.vibrate?.(15);
+  const res = await sendEvent('clean', { pid: p.id, ageMs: Date.now() - p.appearAt });
+  if (res?.ok) toast(res.gain > 0 ? `🧹 撿起來丟掉了！倉鼠分數 +${res.gain}` : `🧹 撿起來了，但放太久了（${res.gain} 分）`);
 }
 
 function pet(id, x, y) {
@@ -511,6 +560,15 @@ function shoot() {
   finishPhoto(v, v.videoWidth, v.videoHeight, camFacing === 'user');
 }
 
+function shrink(canvas, max, q) {
+  const k = Math.min(1, max / Math.max(canvas.width, canvas.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(canvas.width * k);
+  c.height = Math.round(canvas.height * k);
+  c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', q);
+}
+
 async function finishPhoto(src, w, h, mirror) {
   const flash = $('#flash');
   flash.classList.remove('go');
@@ -539,7 +597,12 @@ async function finishPhoto(src, w, h, mirror) {
   let gained = '太快了，隔幾秒再拍才算數喔';
   if (Date.now() - lastPhotoAt > 3000) {
     lastPhotoAt = Date.now();
-    const res = await backend.act(session.code, 'photo', { at: Date.now() });
+    // 上傳一張縮小的版本，另一半在相簿裡看得到
+    const photoId = newId(Date.now());
+    const thumb = shrink(c, 720, 0.72);
+    backend.addPhoto(session.code, { id: photoId, by: me(), byName: room.members[me()]?.name || '', at: Date.now(), data: thumb }).catch(() => toast('照片上傳失敗，只存在這支手機'));
+    photoCache = [{ id: photoId, byName: room.members[me()]?.name, at: Date.now(), data: thumb }, ...photoCache];
+    const res = await backend.act(session.code, 'photo', { at: Date.now(), photoId });
     if (res?.ok) gained = `📷 +1！現在有 ${res.photos} 張，可以換零食了`;
   }
   openSheet(`
@@ -588,10 +651,12 @@ $('#btnNote').addEventListener('click', () => {
 
 const EV_TEXT = {
   drop: (e) => `${FOOD_EMOJI[e.kind]} ${e.byName} 放了${FOOD_LABEL[e.kind]}`,
+  clean: (e) => `🧹 ${e.byName} 撿了大便${e.gain != null ? `（${e.gain > 0 ? '+' : ''}${e.gain} 分）` : ''}`,
   pet: (e) => (e.together ? `💞 ${e.with} 和 ${e.byName} 一起摸 ${hamName(e.hid)}` : null),
   note: (e) => `💌 ${e.byName}：「${e.text}」`,
   photo: (e) => `📷 ${e.byName} 拍了照片`,
   adopt: (e) => `🐹 ${e.byName} 帶 ${e.name} 回家`,
+  settle: (e) => `😢 有 ${e.count} 坨大便放了 3 天都沒撿，倉鼠分數 -${e.count * 10}`,
 };
 function fmtTime(at) {
   const d = new Date(at);
@@ -599,23 +664,55 @@ function fmtTime(at) {
   const hm = d.toTimeString().slice(0, 5);
   return today ? `今天 ${hm}` : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 }
-function openLog() {
+
+async function openLog(tab = 'log') {
   const t = todayTally();
   const tallyHtml = Object.entries(room.members).map(([id, m]) => {
     const x = t[id] || {};
     return `<div><div class="who">${esc(m.name)}${id === me() ? '（你）' : ''}</div>
-      <div class="nums">🥣 飼料 ${x.kibble || 0}　🌻 ${x.seed || 0}　🐟 ${x.fish || 0}<br>✋ 摸摸 ${x.pet || 0}　📷 拍照 ${x.photo || 0}</div></div>`;
+      <div class="nums">🥣 飼料 ${x.kibble || 0}　🌻 ${x.seed || 0}　🐟 ${x.fish || 0}<br>🧹 撿大便 ${x.clean || 0}　📷 拍照 ${x.photo || 0}<br>✋ 摸摸 ${x.pet || 0}</div></div>`;
   }).join('');
+  const thumbs = new Map(photoCache.map((p) => [p.id, p]));
   const items = [...mergedEvents()].reverse().map((e) => {
     const txt = EV_TEXT[e.type]?.(e);
-    return txt ? `<li><time>${fmtTime(e.at)}</time><span>${esc(txt)}</span></li>` : '';
-  }).filter(Boolean).slice(0, 60).join('');
+    if (!txt) return '';
+    const ph = e.type === 'photo' && thumbs.get(e.photoId);
+    const mine = e.by === me() ? ' mine' : '';
+    return `<li class="ev${mine}"><time>${fmtTime(e.at)}</time><span>${esc(txt)}${ph ? `<img class="thumb" data-photo="${ph.id}" src="${ph.data}" alt="" />` : ''}</span></li>`;
+  }).filter(Boolean).slice(0, 80).join('');
+  const album = photoCache.length
+    ? `<div class="album">${photoCache.map((p) => `<figure data-photo="${p.id}"><img src="${p.data}" alt="" /><figcaption>${esc(p.byName || '')} · ${fmtTime(p.at)}</figcaption></figure>`).join('')}</div>`
+    : '<p class="muted">還沒有照片，按下面 📷 拍第一張吧！</p>';
   openSheet(`
-    <h3>📒 照顧紀錄</h3>
-    <div class="section-title">今天的分工</div>
-    <div class="tally">${tallyHtml}</div>
-    <div class="section-title">最近發生的事</div>
-    <ul class="log">${items || '<li><span class="muted">還沒有紀錄</span></li>'}</ul>`);
+    <h3>📒 我們的紀錄</h3>
+    <div class="tabs log-tabs">
+      <button class="tab ${tab === 'log' ? 'active' : ''}" data-ltab="log">紀錄</button>
+      <button class="tab ${tab === 'album' ? 'active' : ''}" data-ltab="album">相簿（${photoCache.length}）</button>
+    </div>
+    <div class="${tab === 'log' ? '' : 'hidden'}">
+      <div class="section-title">今天的分工</div>
+      <div class="tally">${tallyHtml}</div>
+      <div class="section-title">最近 3 天發生的事</div>
+      <ul class="log">${items || '<li><span class="muted">還沒有紀錄</span></li>'}</ul>
+    </div>
+    <div class="${tab === 'album' ? '' : 'hidden'}">${album}</div>`);
+  document.querySelectorAll('[data-ltab]').forEach((b) => b.addEventListener('click', () => openLog(b.dataset.ltab)));
+  document.querySelectorAll('[data-photo]').forEach((el) => el.addEventListener('click', () => {
+    const p = photoCache.find((x) => x.id === el.dataset.photo);
+    if (p) openSheet(`<h3>📷 ${esc(p.byName || '')} · ${fmtTime(p.at)}</h3><img class="photo" src="${p.data}" alt="" /><div class="row"><button class="secondary" id="backLog">回到相簿</button></div>`);
+    $('#backLog')?.addEventListener('click', () => openLog('album'));
+  }));
+  // 背景更新照片（另一半拍的也看得到）
+  if (!openLog.loading) {
+    openLog.loading = true;
+    try {
+      const list = await backend.listPhotos(session.code, 40);
+      const changed = list.length !== photoCache.length || list[0]?.id !== photoCache[0]?.id;
+      photoCache = list;
+      if (changed && !$('#sheet').classList.contains('hidden') && document.querySelector('.log-tabs')) openLog(tab);
+    } catch {}
+    openLog.loading = false;
+  }
 }
 
 function openSettings(welcome = false) {

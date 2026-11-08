@@ -16,6 +16,15 @@ service cloud.firestore {
           && request.resource.data.dog == resource.data.dog)
       );
 
+      // 兩個人拍的照片（壓縮過的小圖）
+      match /photos/{id} {
+        allow read: if request.auth != null
+          && request.auth.uid in get(/databases/$(database)/documents/rooms/$(code)).data.members;
+        allow create: if request.auth != null
+          && request.auth.uid in get(/databases/$(database)/documents/rooms/$(code)).data.members
+          && request.resource.data.data.size() < 900000;
+      }
+
       match /events/{id} {
         allow read, create: if request.auth != null
           && request.auth.uid in get(/databases/$(database)/documents/rooms/$(code)).data.members;

@@ -291,7 +291,8 @@ export class Hamster {
       drinking: kind === 'drink',
       sniffing: kind === 'sniff' || kind === 'peek' || kind === 'stand',
       tall: kind === 'stand',
-      loaf: kind === 'loaf' || kind === 'hide' || kind === 'peek' || kind === 'dig' || p.mode === 'creep',
+      loaf: kind === 'loaf' || kind === 'hide' || kind === 'peek' || kind === 'dig' || kind === 'poop' || p.mode === 'creep',
+      pooping: kind === 'poop',
       dig: kind === 'dig',
       sleeping: kind === 'sleep' || kind === 'nap',
       bathing: kind === 'bath',
@@ -347,7 +348,7 @@ export class Hamster {
     const wiggle = petting ? Math.sin(t * 16) * 0.06 : f.shake ? Math.sin(t * 30) * 0.12 : 0;
     this.rollG.rotation.z = roll + wiggle;
     this.rollG.position.y = 0.3 - this.bathK * 0.08;
-    const theta = q * (1.3 + sk * 0.15) - (f.drinking ? 0.25 : 0) - (f.tall ? 0.12 : 0) + (f.dig ? Math.sin(t * 18) * 0.05 : 0);
+    const theta = (f.pooping ? -0.12 + Math.sin(t * 9) * 0.03 : 0) + q * (1.3 + sk * 0.15) - (f.drinking ? 0.25 : 0) - (f.tall ? 0.12 : 0) + (f.dig ? Math.sin(t * 18) * 0.05 : 0);
     this.pose.rotation.x = theta;
     this.pose.position.y = q * 0.07 - sk * 0.05 + Math.abs(sw) * 0.02 * this.walk + (f.tall ? 0.05 : 0);
     const tallS = f.tall ? 1.08 : 1;
@@ -423,6 +424,7 @@ export class Hamster {
     if (this.blinkT > 0) this.blinkT -= dt;
     let eyeY = this.blinkT > 0 ? 0.1 : 1;
     if (petting || f.groom || f.happy || this.bathK > 0.5) eyeY = 0.15;
+    if (f.pooping) eyeY = 0.45;
     if (sk > 0.3) eyeY = 0.1;
     this.eyes.forEach((e) => (e.scale.y = damp(e.scale.y, eyeY, 25, dt)));
 

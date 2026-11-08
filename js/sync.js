@@ -58,6 +58,16 @@ function localBackend() {
       const r = load(code);
       return !!(r && r.members[uid]);
     },
+    async addPhoto(code, ph) {
+      const k = 'pup-photos-' + code;
+      const list = [ph, ...JSON.parse(localStorage.getItem(k) || '[]')].slice(0, 12);
+      while (list.length) {
+        try { localStorage.setItem(k, JSON.stringify(list)); break; } catch { list.pop(); }
+      }
+    },
+    async listPhotos(code, n = 30) {
+      return JSON.parse(localStorage.getItem('pup-photos-' + code) || '[]').slice(0, n);
+    },
     subscribe(code, onRoom, onEvents, since = 0) {
       const l = {
         code,
@@ -128,6 +138,13 @@ async function firebaseBackend(cfg) {
     async exists(code) {
       const s = await fs.getDoc(roomRef(code));
       return s.exists() && !!s.data().members[uid];
+    },
+    async addPhoto(code, ph) {
+      await fs.setDoc(fs.doc(db, 'rooms', code, 'photos', ph.id), ph);
+    },
+    async listPhotos(code, n = 30) {
+      const qs = await fs.getDocs(fs.query(fs.collection(db, 'rooms', code, 'photos'), fs.orderBy('at', 'desc'), fs.limit(n)));
+      return qs.docs.map((d) => ({ id: d.id, ...d.data() }));
     },
     subscribe(code, onRoom, onEvents, since = 0) {
       const u1 = fs.onSnapshot(roomRef(code), (s) => s.exists() && onRoom(s.data()));

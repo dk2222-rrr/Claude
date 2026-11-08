@@ -3,7 +3,7 @@
 //
 // 一天的節奏（台灣時間）：08:00 在窩裡醒來 → 白天隨機活動（也會小睡）→ 21:00 回窩睡覺。
 // 台灣 08:00 = UTC 00:00，21:00 = UTC 13:00。
-import { WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS, BOWL, levelY } from './layout.js';
+import { WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS, BOWL, TOILET, levelY } from './layout.js';
 
 export const DAY = 86400000;
 export const NIGHT_OFF = 13 * 3600000;
@@ -55,7 +55,8 @@ const P = {
 };
 export const NEST_SPOTS = [[-0.08, 0.03], [0.11, -0.06], [0.02, 0.13]].map(([dx, dz]) => ({ x: NEST.x + dx, y: PLAT.y + 0.03, z: NEST.z + dz }));
 const ENCLOSED = new Set(['wheel', 'sand', 'log', 'tunnel', 'house']);
-const ATOMIC = new Set(['eat', 'happy', 'stash', 'arrive']);
+const ATOMIC = new Set(['eat', 'happy', 'stash', 'arrive', 'poop']);
+export const POOP_DAYS = 3; // 大便最多留在籠子裡 3 天（今天＋前兩天）
 export const HIDDEN_PLACES = new Set(['tunnel', 'house']);
 
 const ACTS = [
@@ -127,6 +128,29 @@ function eatSpot(f) {
     if (inBounds(f.level, x, z) && !inObstacle(f.level, x, z, 0, skip)) return { x, y: levelY(f.level), z, face: heading({ x, z }, f) };
   }
   return { x: f.x, y: levelY(f.level), z: f.z - 0.2, face: 0 };
+}
+
+/* ================= 大便時間表 =================
+   只由「種子＋日期＋倉鼠」決定，不用跑模擬也算得出來，
+   所以前幾天沒撿的大便兩支手機都知道在哪。 */
+export function poopSchedule(seed, ham, A) {
+  const st = { s: hash(seed + ':poop:' + A + ':' + ham.id) };
+  const start = Math.max(A + 30 * 60e3, (ham.addedAt || 0) + 20 * 60e3);
+  const end = A + NIGHT_OFF - 30 * 60e3;
+  if (start >= end) return [];
+  const n = 5 + Math.floor(rnd(st) * 3);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = Math.floor(start + ((end - start) * (i + rnd(st) * 0.8)) / n);
+    let p;
+    if (rnd(st) < 0.6) p = { x: rr(st, TOILET.x0, TOILET.x1), y: 0, z: rr(st, TOILET.z0, TOILET.z1), level: 1 };
+    else {
+      const lvl = rnd(st) < 0.7 ? 1 : 2;
+      p = { ...randomSpot(st, lvl), level: lvl };
+    }
+    out.push({ id: `${ham.id}:${A}:${i}`, hid: ham.id, t, x: p.x, y: p.y + 0.01, z: p.z, level: p.level, appearAt: null, rot: rnd(st) * 6.28 });
+  }
+  return out;
 }
 
 /* ================= 行程規劃 ================= */
@@ -213,6 +237,7 @@ export class Sim {
   // seed：家的種子；hamsters：[{id,name,color,addedAt}]；events：[{id,type,at,...}]
   setInputs(seed, hamsters, events, now) {
     const A = dayAnchor(now);
+    this.cleans = new Map(events.filter((e) => e.type === 'clean').map((e) => [e.pid, e.at]));
     const stream = this.buildStream(A, hamsters, events);
     const pre = events.filter((e) => e.type === 'drop' && e.at < A && e.at >= nightStartBefore(A)).sort((x, y) => x.at - y.at || (x.id < y.id ? -1 : 1));
     const key = seed + '|' + A + '|' + hamsters.map((h) => h.id + ':' + h.addedAt).join(',') + '|' + pre.map((e) => e.id).join(',');
@@ -251,11 +276,19 @@ export class Sim {
 
   reset() {
     const A = this.A;
-    this.st = { evIdx: 0, nightDone: false, hams: {}, order: [], foods: {}, locks: {} };
+    this.st = { evIdx: 0, nightDone: false, hams: {}, order: [], foods: {}, locks: {}, poops: {} };
     this.snaps = [];
     this.lastSnapT = -Infinity;
     this.until = A;
     for (const f of this.preFoods) this.addFood(f);
+    // 前兩天的大便（沒撿的話還在）
+    for (let d = POOP_DAYS - 1; d >= 1; d--) {
+      const day = A - d * DAY;
+      for (const h of this.hamsters) {
+        if (h.addedAt >= day + NIGHT_OFF) continue;
+        for (const p of poopSchedule(this.seed, h, day)) this.st.poops[p.id] = { ...p, appearAt: p.t };
+      }
+    }
     this.hamsters.filter((h) => h.addedAt <= A).forEach((h) => this.spawn(h, A, true));
   }
 
@@ -268,6 +301,8 @@ export class Sim {
     };
     st.hams[h.id] = h;
     st.order.push(h.id);
+    h.poops = [];
+    for (const p of poopSchedule(this.seed, info, this.A)) { st.poops[p.id] = p; h.poops.push(p.id); }
     if (atAnchor || isNight(t)) {
       const wake = this.A + 1500 + idx * 2600;
       h.segs.push({ kind: 'sleep', t0: atAnchor ? nightStartBefore(this.A) : t, t1: isNight(t) ? this.next : wake, pos: { ...h.pos }, face: h.face, place: h.place, level: 2 });
@@ -298,7 +333,7 @@ export class Sim {
       const { segs, ...rest } = h;
       hams[id] = { keep: k, tail: clone(segs.slice(k)), rest: clone(rest) };
     }
-    this.snaps.push({ t, evIdx: st.evIdx, nightDone: st.nightDone, order: [...st.order], foods: clone(st.foods), locks: clone(st.locks), hams });
+    this.snaps.push({ t, evIdx: st.evIdx, nightDone: st.nightDone, order: [...st.order], foods: clone(st.foods), locks: clone(st.locks), poops: clone(st.poops), hams });
     this.lastSnapT = t;
   }
   rewind(tm) {
@@ -315,7 +350,7 @@ export class Sim {
       const segs = cur.segs.slice(0, sh.keep).concat(clone(sh.tail));
       hams[id] = { ...clone(sh.rest), segs };
     }
-    this.st = { evIdx: s.evIdx, nightDone: s.nightDone, order: [...s.order], foods: clone(s.foods), locks: clone(s.locks), hams };
+    this.st = { evIdx: s.evIdx, nightDone: s.nightDone, order: [...s.order], foods: clone(s.foods), locks: clone(s.locks), poops: clone(s.poops), hams };
     this.until = s.t;
     this.lastSnapT = s.t;
   }
@@ -401,6 +436,11 @@ export class Sim {
       if (f && !(f.eatT0 != null && f.eatT0 < cut)) { f.claimedBy = null; f.eatT0 = null; f.eatenAt = null; }
       h.food = null;
     }
+    if (h.poop) {
+      const pp = st.poops[h.poop];
+      if (pp && pp.appearAt != null && pp.appearAt > cut) pp.appearAt = null;
+      h.poop = null;
+    }
     for (const k in st.locks) {
       const L = st.locks[k];
       if (L.hid === h.id && L.until > cut) L.until = cut + (ENCLOSED.has(h.place) ? 900 : 0);
@@ -455,6 +495,11 @@ export class Sim {
       const f = st.foods[id];
       if (f.at < this.N && f.eatT0 == null && f.goneAt == null) f.goneAt = this.N;
     }
+    // 來不及拉的大便：睡前拉在原定的位置
+    for (const id in st.poops) {
+      const p = st.poops[id];
+      if (p.appearAt == null && p.t <= this.N) p.appearAt = this.N;
+    }
   }
 
   nearestFood(h, t) {
@@ -498,13 +543,42 @@ export class Sim {
     else if (intent?.type === 'wake') { p.stay('groom', 1.6, { face: 0.4 }); p.stay('sit', 1.2); }
     else {
       if (!food) food = this.nearestFood(h, t);
+      const poop = food ? null : this.duePoop(h, t);
       if (food) this.planEat(p, h, food);
+      else if (poop) this.planPoop(p, h, poop);
       else this.planRandom(p, h, R, t);
     }
     p.flush();
     if (p.t <= t) p.stay('sit', 1);
     h.segs.push(...p.segs);
     h.nextT = p.t;
+  }
+
+  duePoop(h, t) {
+    for (const id of h.poops || []) {
+      const pp = this.st.poops[id];
+      if (pp.appearAt == null && pp.t <= t) return pp;
+    }
+    return null;
+  }
+  planPoop(p, h, pp) {
+    h.poop = pp.id;
+    // 大便要在屁股後面：盡量面向鏡頭蹲著
+    const opts = [[0, 0.16, 0], [0, -0.16, PI], [0.16, 0, PI / 2], [-0.16, 0, -PI / 2]];
+    let stand = null;
+    for (const [dx, dz, face] of opts) {
+      const x = pp.x + dx;
+      const z = pp.z + dz;
+      if (inBounds(pp.level, x, z) && !inObstacle(pp.level, x, z)) { stand = { x, z, face }; break; }
+    }
+    stand = stand || { x: pp.x, z: pp.z + 0.12, face: 0 };
+    p.goTo({ x: stand.x, y: levelY(pp.level), z: stand.z }, pp.level, 0.8);
+    const s = p.stay('poop', 1.4, { face: stand.face });
+    pp.appearAt = s.t1 - 400;
+    // 拉完往旁邊走開一點
+    const away = { x: stand.x + (rnd(h.rng) < 0.5 ? -0.3 : 0.3), y: levelY(pp.level), z: stand.z + rr(h.rng, -0.1, 0.1) };
+    if (inBounds(pp.level, away.x, away.z) && !inObstacle(pp.level, away.x, away.z, 0.02)) p.goTo(away, pp.level, 0.6);
+    p.stay('sniff', 0.6);
   }
 
   planEat(p, h, f) {
@@ -666,5 +740,17 @@ export class Sim {
   }
   foods() {
     return this.ready ? Object.values(this.st.foods) : [];
+  }
+  // 現在籠子裡看得到的大便
+  poopsAt(t) {
+    if (!this.ready) return [];
+    const out = [];
+    for (const id in this.st.poops) {
+      const p = this.st.poops[id];
+      if (p.appearAt == null || p.appearAt > t) continue;
+      const c = this.cleans?.get(id);
+      out.push({ ...p, cleanedAt: c ?? null });
+    }
+    return out;
   }
 }
