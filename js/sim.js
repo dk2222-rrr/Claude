@@ -1,18 +1,21 @@
 // 確定性的倉鼠模擬：兩支手機用同一個種子＋同一串事件，算出一模一樣的動作。
 // 只用 + - * / sqrt 與整數亂數，避免不同裝置的三角函數誤差影響決策。
 //
-// 一天的節奏（台灣時間）：08:00 在窩裡醒來 → 白天隨機活動（也會小睡）→ 21:00 回窩睡覺。
-// 台灣 08:00 = UTC 00:00，21:00 = UTC 13:00。
+// 一天的節奏（台灣時間）：08:00 在窩裡醒來 → 白天隨機活動（也會小睡）→ 24:00 回窩睡覺。
+// 台灣 08:00 = UTC 00:00，24:00 = UTC 16:00。
 import { makeLayout } from './layout.js';
 
 // 目前籠子的配置（買了新籠子／玩具就換一組）
-let LAY, WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, OBA1, OBA2, BOUNDS, TOILET, BOWL, P, TUN_Y;
+let LAY, WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB, OBA1, OBA2, BOUNDS, TOILET, BOWL, P, TUN_Y, TOYS_AT, LINKS;
 export let NEST_SPOTS = [];
 const levelY = (lvl) => (lvl === 2 && PLAT ? PLAT.y : 0);
 const floorOf = (lvl) => 'floor' + lvl;
 export function setLayout(L) {
   LAY = L;
-  ({ WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, OBA1, OBA2, BOUNDS, TOILET, BOWL } = L);
+  ({ WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB, OBA1, OBA2, BOUNDS, TOILET, BOWL } = L);
+  LINKS = L.links;
+  TOYS_AT = {};
+  for (const t of L.toys) TOYS_AT[t.id] = t;
   TUN_Y = LOG ? LOG.r - LOG.inner : 0;
   P = { drink: { x: DRINK.x, y: 0, z: DRINK.z } };
   if (WHEEL) {
@@ -44,7 +47,7 @@ export function setLayout(L) {
 setLayout(makeLayout());
 
 export const DAY = 86400000;
-export const NIGHT_OFF = 13 * 3600000;
+export const NIGHT_OFF = 16 * 3600000; // 台灣 08:00 起算 16 小時 = 24:00
 export const dayAnchor = (t) => Math.floor(t / DAY) * DAY;
 export const isNight = (t) => t - dayAnchor(t) >= NIGHT_OFF;
 export const nightStartBefore = (anchor) => anchor - (DAY - NIGHT_OFF);
@@ -73,7 +76,7 @@ const lerp3 = (a, b, k) => ({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k
 const heading = (a, b) => Math.atan2(b.x - a.x, b.z - a.z); // 只用在畫面上的朝向
 const clone = (o) => structuredClone(o);
 
-const ENCLOSED = new Set(['wheel', 'sand', 'log', 'tunnel', 'house']);
+const ENCLOSED = new Set(['wheel', 'sand', 'log', 'tunnel', 'house', 'steps', 'swing', 'slideTop', 'ball']);
 const ATOMIC = new Set(['eat', 'happy', 'stash', 'arrive', 'poop']);
 export const POOP_DAYS = 3; // 大便最多留在籠子裡 3 天（今天＋前兩天）
 export const HIDDEN_PLACES = new Set(['tunnel', 'house']);
@@ -81,15 +84,17 @@ export const HIDDEN_PLACES = new Set(['tunnel', 'house']);
 // 真的倉鼠：大部分時間在休息、張望、理毛，偶爾才跑一陣子
 const ACTS = [
   ['wander', 14], ['sit', 10], ['groom', 9], ['loaf', 13], ['stand', 5], ['dig', 6], ['wheel', 10], ['sand', 5],
-  ['drink', 6], ['tunnel', 8], ['logTop', 4], ['house', 6], ['nap', 6], ['otherLevel', 7],
+  ['drink', 6], ['tunnel', 8], ['logTop', 4], ['house', 6], ['nap', 6], ['otherLevel', 9],
+  ['chew', 6], ['steps', 5], ['swing', 7], ['slide', 7], ['ball', 6],
 ];
 const ACT_TOTAL = ACTS.reduce((s, a) => s + a[1], 0);
-const COOL = { sand: 15 * 60e3, drink: 10 * 60e3, nap: 20 * 60e3, wheel: 3 * 60e3, tunnel: 4 * 60e3, house: 6 * 60e3, logTop: 6 * 60e3, dig: 3 * 60e3 };
-const LOCKED = new Set(['wheel', 'sand', 'drink', 'tunnel', 'logTop', 'house']);
+const COOL = { chew: 5 * 60e3, steps: 4 * 60e3, swing: 5 * 60e3, slide: 6 * 60e3, ball: 8 * 60e3, sand: 15 * 60e3, drink: 10 * 60e3, nap: 20 * 60e3, wheel: 3 * 60e3, tunnel: 4 * 60e3, house: 6 * 60e3, logTop: 6 * 60e3, dig: 3 * 60e3 };
+const LOCKED = new Set(['wheel', 'sand', 'drink', 'tunnel', 'logTop', 'house', 'chew', 'steps', 'swing', 'slide', 'ball']);
+const toyFront = (t) => ({ x: t.x, y: levelY(t.level), z: t.z + (t.size === 'L' ? 0.38 : 0.26) });
 export const EAT_SEC = { kibble: 8, seed: 6, fish: 9 };
 
 function inObstacle(lvl, x, z, pad = 0, skip, all = false) {
-  const obs = all ? (lvl === 1 ? OBA1 : OBA2) : lvl === 1 ? OB1 : OB2;
+  const obs = (all && lvl <= 2 ? (lvl === 1 ? OBA1 : OBA2) : OB[lvl]) || [];
   return obs.some((o) => o !== skip && d2(o, { x, z }) < o.r + pad);
 }
 function inBounds(lvl, x, z) {
@@ -100,7 +105,7 @@ function inBounds(lvl, x, z) {
 
 // 線段穿過障礙物就繞過去
 function route(from, to, lvl) {
-  const obs = lvl === 1 ? OB1 : OB2;
+  const obs = OB[lvl] || [];
   const b = BOUNDS[lvl];
   const pts = [];
   let cur = { x: from.x, z: from.z };
@@ -144,7 +149,7 @@ function randomSpot(st, lvl, all = false) {
 // 吃東西時站的位置：盡量站在食物後面、臉朝鏡頭
 function eatSpot(f) {
   const cands = [[0, -0.26], [-0.22, -0.13], [0.22, -0.13], [-0.26, 0], [0.26, 0], [0, 0.26]];
-  const skip = (f.level === 1 ? OB1 : OB2).find((o) => d2(o, f) < o.r);
+  const skip = (OB[f.level] || []).find((o) => d2(o, f) < o.r);
   for (const [dx, dz] of cands) {
     const x = f.x + dx;
     const z = f.z + dz;
@@ -174,6 +179,28 @@ export function poopSchedule(seed, ham, A) {
     out.push({ id: `${ham.id}:${A}:${i}`, hid: ham.id, t, x: p.x, y: p.y + 0.01, z: p.z, level: p.level, appearAt: null, rot: rnd(st) * 6.28 });
   }
   return out;
+}
+
+// 從一層走到另一層要經過哪些通道（木梯、隧道）
+function levelPath(from, to) {
+  if (from === to) return [];
+  const prev = { [from]: null };
+  const q = [from];
+  while (q.length) {
+    const cur = q.shift();
+    for (const lk of LINKS) {
+      const nxt = lk.a === cur ? lk.b : lk.b === cur ? lk.a : null;
+      if (nxt == null || nxt in prev) continue;
+      prev[nxt] = { lk, from: cur };
+      if (nxt === to) {
+        const out = [];
+        for (let n = to; prev[n]; n = prev[n].from) out.unshift(prev[n].lk);
+        return out;
+      }
+      q.push(nxt);
+    }
+  }
+  return null;
 }
 
 /* ================= 行程規劃 ================= */
@@ -221,6 +248,26 @@ class Plan {
       case 'sand': this.leg(P.sandEntry, 'jump', 0, 'floor1', 1, 0.45); break;
       case 'log': this.leg(P.logFront, 'jump', 0, 'floor1', 1, 0.5); break;
       case 'house': this.leg(P.houseDoor, 'walk', 0.5, floorOf(HOUSE.level), HOUSE.level); break;
+      case 'steps':
+      case 'swing': {
+        const t = TOYS_AT[h.place];
+        if (t) this.leg(toyFront(t), 'jump', 0, floorOf(t.level), t.level, 0.5);
+        break;
+      }
+      case 'slideTop': {
+        const t = TOYS_AT.slide;
+        if (t) this.leg({ x: t.x + 0.42, y: levelY(t.level) + 0.02, z: t.z }, 'slide', 0, floorOf(t.level), t.level, 0.9);
+        break;
+      }
+      case 'ball': {
+        const t = TOYS_AT.ball;
+        if (t) {
+          const pts = route(h.pos, t, t.level);
+          for (const q of pts) this.leg({ x: q.x, y: levelY(t.level), z: q.z }, 'roll', 0.45, 'ball', t.level);
+          this.leg(toyFront(t), 'jump', 0, floorOf(t.level), t.level, 0.45);
+        }
+        break;
+      }
       case 'tunnel': {
         const left = h.pos.x < LOG.x;
         this.leg({ x: left ? P.logL : P.logR, y: TUN_Y, z: LOG.z }, 'creep', 0.45, 'tunnel', 1);
@@ -236,7 +283,15 @@ class Plan {
   goTo(to, lvl, speed = 0.55) {
     this.exit();
     const h = this.h;
-    if (h.level !== lvl && RAMP) {
+    const path = levelPath(h.level, lvl);
+    if (!path) { this.walkOn(h.level, to, speed); return; }
+    for (const lk of path) this.cross(lk, speed);
+    this.walkOn(lvl, to, speed);
+  }
+  // 走過一個通道：木梯爬上爬下、鑽透明隧道到隔壁籠子
+  cross(lk, speed) {
+    const h = this.h;
+    if (lk.type === 'ramp') {
       if (h.level === 1) {
         this.walkOn(1, P.rampBot, speed);
         this.leg(P.rampEdge, 'climb', 0.45, 'floor2', 2);
@@ -246,8 +301,16 @@ class Plan {
         this.leg(P.rampEdge, 'walk', 0.4, 'floor2', 2);
         this.leg(P.rampBot, 'climb', 0.6, 'floor1', 1);
       }
+      return;
     }
-    this.walkOn(lvl, to, speed);
+    const fwd = h.level === lk.a;
+    const from = fwd ? lk.inA : lk.inB;
+    const to = fwd ? lk.inB : lk.inA;
+    const dest = fwd ? lk.b : lk.a;
+    const path = fwd ? lk.path : [...lk.path].reverse();
+    this.walkOn(h.level, from, speed);
+    for (const q of path) this.leg(q, 'tube', 0.42, 'tube', h.level);
+    this.leg(to, 'tube', 0.42, floorOf(dest), dest);
   }
 }
 
@@ -433,6 +496,8 @@ export class Sim {
     if (s.kind === 'move') {
       let li = s.legs.findIndex((l) => T < l.t1);
       if (li < 0) li = s.legs.length - 1;
+      // 在隧道裡的話要整段鑽完
+      while (s.legs[li].mode === 'tube' && s.legs[li + 1]?.mode === 'tube') li++;
       const L = s.legs[li];
       if (L.mode === 'walk' && T > L.t0 && T < L.t1) {
         const k = (T - L.t0) / (L.t1 - L.t0);
@@ -635,7 +700,7 @@ export class Sim {
     let act = 'wander';
     for (const [name, w] of ACTS) { if ((pick -= w) < 0) { act = name; break; } }
     // 籠子裡沒有的玩具就不能玩
-    const avail = { wheel: !!WHEEL, sand: !!SAND, tunnel: !!LOG, logTop: !!LOG, house: !!HOUSE, otherLevel: !!PLAT };
+    const avail = { wheel: !!WHEEL, sand: !!SAND, tunnel: !!LOG, logTop: !!LOG, house: !!HOUSE, otherLevel: LAY.levels.length > 1, chew: !!TOYS_AT.chew, steps: !!TOYS_AT.steps, swing: !!TOYS_AT.swing, slide: !!TOYS_AT.slide, ball: !!TOYS_AT.ball };
     if (avail[act] === false) act = rnd(R) < 0.5 ? 'wander' : 'loaf';
     if (COOL[act] && t - (h.cool[act] ?? -1e15) < COOL[act]) act = 'wander';
     if (LOCKED.has(act) && !this.lockFree(act, t)) act = 'wander';
@@ -733,9 +798,73 @@ export class Sim {
         p.stay('groom', 3);
         break;
       }
+      case 'chew': {
+        const t = TOYS_AT.chew;
+        p.goTo(toyFront(t), t.level, walk());
+        p.stay('sniff', 1.5, { face: PI });
+        p.stay('gnaw', rr(R, 6, 14), { face: PI });
+        p.stay('groom', rr(R, 2, 4));
+        break;
+      }
+      case 'steps': {
+        const t = TOYS_AT.steps;
+        p.goTo(toyFront(t), t.level, walk());
+        p.stay('stand', 1.5, { face: PI });
+        p.leg({ x: t.x, y: levelY(t.level) + 0.2, z: t.z }, 'jump', 0, 'steps', t.level, 0.6);
+        p.stay(rnd(R) < 0.5 ? 'sit' : 'loaf', rr(R, 6, 15), { face: rr(R, -0.6, 0.6) });
+        p.stay('stand', 2);
+        p.leg(toyFront(t), 'jump', 0, floorOf(t.level), t.level, 0.6);
+        break;
+      }
+      case 'swing': {
+        const t = TOYS_AT.swing;
+        p.goTo(toyFront(t), t.level, walk());
+        p.stay('sniff', 1.5, { face: PI });
+        p.leg({ x: t.x, y: levelY(t.level) + 0.2, z: t.z }, 'jump', 0, 'swing', t.level, 0.6);
+        p.stay('swinging', rr(R, 10, 25), { face: 0 });
+        p.stay('sit', 2, { face: 0 });
+        p.leg(toyFront(t), 'jump', 0, floorOf(t.level), t.level, 0.6);
+        p.stay('shake', 1);
+        break;
+      }
+      case 'slide': {
+        const t = TOYS_AT.slide;
+        const y0 = levelY(t.level);
+        const n = 1 + Math.floor(rnd(R) * 3);
+        for (let i = 0; i < n; i++) {
+          p.goTo({ x: t.x - 0.44, y: y0, z: t.z }, t.level, walk());
+          p.stay('sniff', 1, { face: PI / 2 });
+          p.leg({ x: t.x - 0.16, y: y0 + 0.42, z: t.z }, 'climb', 0.35, 'slideTop', t.level);
+          p.stay('stand', 1.5, { face: PI / 2 });
+          p.leg({ x: t.x + 0.44, y: y0 + 0.02, z: t.z }, 'slide', 0, floorOf(t.level), t.level, 0.9);
+          p.stay('happy', 1.5);
+          // 從旁邊繞回梯子
+          p.goTo({ x: t.x + 0.2, y: y0, z: t.z + 0.34 }, t.level, walk());
+        }
+        p.stay('sit', rr(R, 2, 4));
+        break;
+      }
+      case 'ball': {
+        const t = TOYS_AT.ball;
+        p.goTo(toyFront(t), t.level, walk());
+        p.stay('sniff', 1.5, { face: PI });
+        p.leg({ x: t.x, y: levelY(t.level), z: t.z }, 'jump', 0, 'ball', t.level, 0.45);
+        // 在球裡滾來滾去
+        const n = 2 + Math.floor(rnd(R) * 3);
+        for (let i = 0; i < n; i++) {
+          const q = randomSpot(R, t.level);
+          for (const w of route(h.pos, q, t.level)) p.leg({ x: w.x, y: levelY(t.level), z: w.z }, 'roll', rr(R, 0.4, 0.7), 'ball', t.level);
+        }
+        for (const w of route(h.pos, t, t.level)) p.leg({ x: w.x, y: levelY(t.level), z: w.z }, 'roll', 0.45, 'ball', t.level);
+        p.leg({ x: t.x, y: levelY(t.level), z: t.z }, 'roll', 0.45, 'ball', t.level);
+        p.leg(toyFront(t), 'jump', 0, floorOf(t.level), t.level, 0.45);
+        p.stay('shake', 1.2);
+        break;
+      }
       case 'otherLevel':
       case 'wander': {
-        const lvl = act === 'otherLevel' ? (h.level === 1 ? 2 : 1) : h.level;
+        const others = LAY.levels.filter((l) => l !== h.level);
+        const lvl = act === 'otherLevel' && others.length ? others[Math.floor(rnd(R) * others.length)] : h.level;
         const n = rnd(R) < 0.7 ? 1 : 2;
         for (let i = 0; i < n; i++) {
           p.goTo(randomSpot(R, lvl), lvl, walk());

@@ -2,9 +2,9 @@ import { World } from './world.js';
 import { Sim, hash, dayAnchor, isNight, nightStartBefore, poopSchedule, DAY, NIGHT_OFF, POOP_DAYS } from './sim.js';
 import { PALETTES } from './hamster.js';
 import { makeLayout } from './layout.js';
-import { SHOP, setupOf, shopState } from './shop.js';
+import { SHOP, setupOf, shopState, RARITY, CATEGORIES } from './shop.js';
 import { createBackend } from './sync.js';
-import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST, scoreOf, poopPenalty } from './state.js';
+import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST, scoreOf, poopPenalty, photosLeft, PHOTOS_PER_DAY } from './state.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -141,7 +141,7 @@ function feedSim() {
   if (!room || !sim) return;
   world.setHamsters(hams());
   const L = makeLayout(setupOf(room));
-  world.setLayout(L);
+  world.setLayout(L, setupOf(room).styles);
   sim.setInputs(hash(session.code), hams(), mergedEvents(), Date.now(), L);
   sim.advance(Date.now() + 30000);
   if (!firstEvents) settleOldPoops();
@@ -193,12 +193,14 @@ function onRoom(r) {
     }
     const ps = setupOf(prev);
     const ns = setupOf(r);
+    if (prev && JSON.stringify(ps.styles) !== JSON.stringify(ns.styles) && ps.items.length === ns.items.length && ps.cage === ns.cage) say('哇～變漂亮了！✨', 3);
     if (prev && (ps.cage !== ns.cage || ps.items.length !== ns.items.length)) {
       const flash = $('#flash');
       flash.classList.remove('go');
       void flash.offsetWidth;
       flash.classList.add('go');
       const newItem = ps.cage !== ns.cage ? SHOP.find((x) => x.id === ns.cage) : SHOP.find((x) => x.id === ns.items[ns.items.length - 1]);
+      if (newItem?.id === 'annex1' || newItem?.id === 'annex2') { say('有隧道！要去隔壁探險～🚇', 4); }
       if (newItem) say(ps.cage !== ns.cage ? `哇！新家好大！🏡` : `哇！是新的${newItem.label}！`, 4);
     }
     if (prev && Object.keys(prev.members).length < 2 && Object.keys(r.members).length === 2) {
@@ -252,7 +254,7 @@ function render() {
   world.setNight(night);
   document.body.classList.toggle('night', night);
   let banner = '';
-  if (night) banner = '🌙 睡覺時間（21:00–08:00），小聲一點喔';
+  if (night) banner = '🌙 睡覺時間（24:00–08:00），小聲一點喔';
   else if (isAnniversaryDay(d.anniversary)) banner = `🎂 今天是紀念日！`;
   else if (days % 100 === 0) banner = `🎉 在一起第 ${days} 天！`;
   $('#banner').textContent = banner;
@@ -531,9 +533,14 @@ $('#btnPhoto').addEventListener('click', () => room && openCamera());
 
 async function openCamera() {
   stopCam();
+  const left = photosLeft(room, me());
+  if (left <= 0) {
+    toast(`📷 今天的 ${PHOTOS_PER_DAY} 張已經拍完了，明天再來拍吧！`);
+    return;
+  }
   openSheet(`
-    <h3>📷 拍一張照片</h3>
-    <p class="muted" style="text-align:left">拍你們的日常、自拍、今天吃的東西都可以～每拍 1 張得 1 點，可以換零食給倉鼠。</p>
+    <h3>📷 拍一張照片 <span class="left-badge">今天還能拍 ${left} 張</span></h3>
+    <p class="muted" style="text-align:left">拍你們的日常、自拍、今天吃的東西都可以～每拍 1 張得 1 點，可以換零食給倉鼠。每人每天最多 ${PHOTOS_PER_DAY} 張。</p>
     <div class="cam-wrap"><video id="camVideo" autoplay playsinline muted></video><div id="camMsg" class="cam-msg">相機開啟中…</div></div>
     <div class="cam-ctrl">
       <button class="secondary" id="camFlip" aria-label="切換鏡頭">🔄</button>
@@ -611,23 +618,30 @@ async function finishPhoto(src, w, h, mirror) {
   stopCam();
 
   let gained = '太快了，隔幾秒再拍才算數喔';
+  let canAgain = true;
   if (Date.now() - lastPhotoAt > 3000) {
     lastPhotoAt = Date.now();
-    // 上傳一張縮小的版本，另一半在相簿裡看得到
     const photoId = newId(Date.now());
-    const thumb = shrink(c, 720, 0.72);
-    backend.addPhoto(session.code, { id: photoId, by: me(), byName: room.members[me()]?.name || '', at: Date.now(), data: thumb }).catch(() => toast('照片上傳失敗，只存在這支手機'));
-    photoCache = [{ id: photoId, byName: room.members[me()]?.name, at: Date.now(), data: thumb }, ...photoCache];
     const res = await backend.act(session.code, 'photo', { at: Date.now(), photoId });
-    if (res?.ok) gained = `📷 +1！現在有 ${res.photos} 張，可以換零食了`;
+    if (res?.ok) {
+      // 上傳一張縮小的版本，另一半在相簿裡看得到
+      const thumb = shrink(c, 720, 0.72);
+      backend.addPhoto(session.code, { id: photoId, by: me(), byName: room.members[me()]?.name || '', at: Date.now(), data: thumb }).catch(() => toast('照片上傳失敗，只存在這支手機'));
+      photoCache = [{ id: photoId, byName: room.members[me()]?.name, at: Date.now(), data: thumb }, ...photoCache];
+      gained = `📷 +1！現在有 ${res.photos} 張可以換零食｜今天還能拍 ${res.left} 張`;
+      canAgain = res.left > 0;
+    } else if (res?.reason === 'limit') {
+      gained = `今天的 ${PHOTOS_PER_DAY} 張已經拍完了，明天再來吧（這張只會存在你的手機）`;
+      canAgain = false;
+    }
   }
   openSheet(`
     <h3>📸 拍好了！</h3>
     <img class="photo" src="${url}" alt="照片" />
     <p class="muted">${gained}</p>
-    <div class="row"><button class="secondary" id="again">再拍一張</button><button class="primary" id="savePhoto">儲存／分享</button></div>
+    <div class="row">${canAgain ? '<button class="secondary" id="again">再拍一張</button>' : ''}<button class="primary" id="savePhoto">儲存／分享</button></div>
     <p class="mode-note">把零食從下面拖進籠子：🌻 葵花籽 1 張　🐟 小魚乾 2 張</p>`);
-  $('#again').addEventListener('click', openCamera);
+  $('#again')?.addEventListener('click', openCamera);
   $('#savePhoto').addEventListener('click', async () => {
     const blob = await (await fetch(url)).blob();
     const file = new File([blob], `photo-${Date.now()}.jpg`, { type: 'image/jpeg' });
@@ -639,30 +653,65 @@ async function finishPhoto(src, w, h, mirror) {
 }
 
 /* ---------------- 商店：用好感度換籠子和玩具 ---------------- */
-function openShop() {
+let shopTab = 'all';
+function openShop(tab = shopTab) {
+  shopTab = tab;
   const setup = setupOf(room);
   const pts = liveScore();
   const cageName = { small: '小籠子', medium: '中籠子', big: '雙層大籠子' }[setup.cage];
-  const rows = SHOP.map((it) => {
+  // 分組：同一類放一起，預設款排最前面（才能換回來），其餘依價格由便宜到貴
+  const byCost = (a, b) => (b.base ? 1 : 0) - (a.base ? 1 : 0) || a.cost - b.cost;
+  const SLOT = { bedding: '🧻 墊料', cageColor: '🎨 籠子顏色', wheel: '🎡 滾輪造型', room: '🖼️ 房間主題', nest: '🛏️ 窩的造型', house: '🏠 小屋造型' };
+  let groups;
+  if (tab === 'all') groups = CATEGORIES.filter((c) => c.id !== 'all').map((c) => ({ title: c.label, items: SHOP.filter((it) => it.cat === c.id && !it.base).sort(byCost) }));
+  else if (tab === 'style' || tab === 'home') {
+    const base = SHOP.filter((it) => it.cat === tab && it.kind !== 'style').sort(byCost);
+    groups = base.length ? [{ title: '✨ 設施', items: base }] : [];
+    for (const slot of Object.keys(SLOT)) {
+      const items = SHOP.filter((it) => it.cat === tab && it.slot === slot).sort(byCost);
+      if (items.length) groups.push({ title: SLOT[slot], items });
+    }
+  } else groups = [{ title: '', items: SHOP.filter((it) => it.cat === tab).sort(byCost) }];
+  const card = (it) => {
     const st = shopState(it, setup);
-    let btn;
-    if (st === 'owned') btn = `<span class="owned">${it.type === 'cage' && it.id !== setup.cage ? '已升級' : '已擁有'} ✓</span>`;
-    else if (st === 'needs') btn = `<span class="needs">要先換${it.needs === 'medium' ? '中籠子' : '大籠子'}</span>`;
-    else btn = `<button class="${pts >= it.cost ? 'primary' : 'secondary'} buy" data-buy="${it.id}" ${pts >= it.cost ? '' : 'disabled'}>💝 ${it.cost}</button>`;
-    return `<li class="shop-item ${st}"><b class="emo">${it.emoji}</b><div class="info"><div class="name">${it.label}</div><div class="desc">${it.desc}</div></div>${btn}</li>`;
-  }).join('');
+    const rar = RARITY[it.rarity];
+    let foot;
+    if (st.s === 'owned') foot = '<span class="tag owned">已擁有 ✓</span>';
+    else if (st.s === 'equipped') foot = '<span class="tag owned">使用中 ✓</span>';
+    else if (st.s === 'equip') foot = `<button class="secondary buy" data-equip="${it.id}">裝上</button>`;
+    else if (st.s === 'needs') foot = `<span class="tag needs">${st.reason}</span>`;
+    else if (pts >= it.cost) foot = `<button class="primary buy" data-buy="${it.id}">💝 ${it.cost}</button>`;
+    else foot = `<span class="tag poor">💝 ${it.cost}<small>還差 ${it.cost - pts}</small></span>`;
+    return `<li class="card r-${it.rarity} s-${st.s}">
+      <div class="card-top" style="background:${rar.bg}"><span class="rar" style="background:${rar.color}">${rar.label}</span><b class="emo">${it.emoji}</b></div>
+      <div class="card-body"><div class="name">${it.label}</div><div class="desc">${it.desc}</div></div>
+      <div class="card-foot">${foot}</div></li>`;
+  };
   openSheet(`
     <h3>🛒 倉鼠商店</h3>
-    <div class="shop-top"><span>現在住：<b>${cageName}</b></span><span class="pts">💝 好感度 <b>${pts}</b></span></div>
-    <ul class="shop">${rows}</ul>
-    <p class="mode-note">摸摸、餵食、撿大便、拍照都會增加好感度；大便放太久會減少。<br>換來的東西兩個人一起用，另一支手機也會馬上看到。</p>`);
+    <div class="shop-top"><span>現在住：<b>${cageName}</b>${setup.items.includes('annex1') ? ' ＋遊戲籠' + (setup.items.includes('annex2') ? ' ×2' : '') : ''}</span><span class="pts">💝 <b>${pts}</b></span></div>
+    <div class="shop-tabs">${CATEGORIES.map((c) => `<button class="${c.id === tab ? 'on' : ''}" data-tab="${c.id}">${c.label}</button>`).join('')}</div>
+    ${groups.map((g) => `${g.title ? `<div class="shop-sec">${g.title}</div>` : ''}<ul class="cards">${g.items.map(card).join('')}</ul>`).join('')}
+    <p class="mode-note">✨ 越稀有、越酷炫的東西越貴：普通 → 稀有 → 史詩 → 傳說<br>摸摸、餵食、撿大便、拍照都會增加好感度。換來的東西兩個人一起用，另一支手機也會馬上看到。</p>`);
+  document.querySelectorAll('.shop-tabs [data-tab]').forEach((b) => b.addEventListener('click', () => {
+    const y = $('.sheet').scrollTop;
+    openShop(b.dataset.tab);
+    $('.sheet').scrollTop = Math.min(y, 60);
+  }));
+  document.querySelectorAll('[data-equip]').forEach((b) => b.addEventListener('click', async () => {
+    const res = await backend.act(session.code, 'equip', { item: b.dataset.equip, at: Date.now() });
+    if (res?.ok) { toast(`✨ 換上「${res.item.label}」`); openShop(tab); }
+  }));
   document.querySelectorAll('[data-buy]').forEach((b) => b.addEventListener('click', async () => {
     const it = SHOP.find((x) => x.id === b.dataset.buy);
     if (!confirm(`用 ${it.cost} 好感度換「${it.label}」？`)) return;
     b.disabled = true;
     const res = await backend.act(session.code, 'buy', { item: it.id, at: Date.now() });
-    if (res?.ok) { closeSheet(); toast(`🎁 「${it.label}」放進籠子了！`); }
-    else {
+    if (res?.ok) {
+      closeSheet();
+      toast(`🎁 換到「${it.label}」了！`);
+      if (it.rarity === 'legendary' || it.rarity === 'epic') burst(innerWidth / 2, innerHeight / 2, 16, ['✨', '🎉', '💖', '⭐']);
+    } else {
       toast(res?.reason === 'points' ? '好感度不夠，再多照顧牠們一下吧 💝' : '現在不能換這個喔');
       b.disabled = false;
     }

@@ -134,19 +134,39 @@ img.photo { width: 100%; border-radius: 18px; box-shadow: var(--shadow); margin-
 .album figcaption { font-size: 10.5px; color: var(--muted); margin-top: 3px; text-align: center; }
 
 /* 商店 */
-.shop-top { display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 14px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
+.shop-top { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(90deg, #fff, #fff5f8); border-radius: 16px; padding: 10px 14px; margin-bottom: 10px; font-size: 13.5px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+.shop-top .pts { background: #ffe3ec; border-radius: 999px; padding: 4px 12px; }
 .shop-top .pts b { color: #d0557a; font-size: 18px; }
-.shop { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-.shop-item { display: flex; align-items: center; gap: 12px; background: #fff; border-radius: 16px; padding: 10px 12px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
-.shop-item .emo { font-size: 30px; width: 40px; text-align: center; }
-.shop-item .info { flex: 1; min-width: 0; }
-.shop-item .name { font-weight: 700; font-size: 15px; }
-.shop-item .desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
-.shop-item .buy { padding: 8px 12px; border-radius: 12px; font-size: 14px; white-space: nowrap; }
-.shop-item .buy:disabled { opacity: .55; }
-.shop-item .owned { color: #4f9a68; font-size: 13px; font-weight: 600; white-space: nowrap; }
-.shop-item .needs { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.shop-item.owned, .shop-item.needs { opacity: .75; }
+.shop-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 4px; scrollbar-width: none; }
+.shop-tabs::-webkit-scrollbar { display: none; }
+.shop-tabs button { flex: none; padding: 7px 13px; border-radius: 999px; background: #f6e9ed; font-size: 13px; color: var(--muted); }
+.shop-tabs button.on { background: var(--pink); color: #fff; font-weight: 700; box-shadow: 0 4px 10px rgba(255,122,162,.35); }
+.shop-sec { font-size: 13px; font-weight: 800; color: #b5718a; margin: 14px 2px 8px; }
+.cards { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.card { background: #fff; border-radius: 18px; overflow: hidden; box-shadow: 0 3px 10px rgba(0,0,0,.06); display: flex; flex-direction: column; position: relative; border: 2px solid transparent; }
+.card-top { position: relative; height: 78px; display: flex; align-items: center; justify-content: center; }
+.card-top .emo { font-size: 40px; filter: drop-shadow(0 4px 6px rgba(0,0,0,.15)); }
+.card-top .rar { position: absolute; left: 8px; top: 8px; color: #fff; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.card-body { padding: 8px 10px 4px; flex: 1; }
+.card .name { font-weight: 800; font-size: 14px; }
+.card .desc { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+.card-foot { padding: 6px 10px 10px; }
+.card-foot .buy { width: 100%; padding: 8px 0; border-radius: 12px; font-size: 14px; }
+.card-foot .tag { display: block; text-align: center; font-size: 12px; padding: 7px 0; border-radius: 12px; background: #f6f1f3; color: var(--muted); }
+.card-foot .tag.owned { background: #eaf7ee; color: #4f9a68; font-weight: 700; }
+.card-foot .tag.poor { color: #c6879a; font-weight: 700; }
+.card-foot .tag.poor small { display: block; font-weight: 400; font-size: 10.5px; }
+.card.s-needs .card-top { filter: grayscale(.6); opacity: .75; }
+.card.r-rare { border-color: #cfe5ff; }
+.card.r-epic { border-color: #e0c9ff; }
+.card.r-epic .card-top .emo { animation: bob 2.4s ease-in-out infinite; }
+.card.r-legendary { border-color: transparent; background: linear-gradient(#fff, #fff) padding-box, linear-gradient(120deg, #ffd34d, #ff8fc0, #8fd3ff, #b9f2a1, #ffd34d) border-box; background-size: 100% 100%, 300% 300%; animation: shimmer 4s linear infinite; }
+.card.r-legendary .card-top::after { content: '✨'; position: absolute; right: 10px; top: 6px; font-size: 16px; animation: twinkle 1.6s ease-in-out infinite; }
+.card.r-legendary .card-top .emo { animation: bob 2s ease-in-out infinite; }
+@keyframes shimmer { 0% { background-position: 0 0, 0% 50%; } 100% { background-position: 0 0, 300% 50%; } }
+@keyframes bob { 50% { transform: translateY(-5px) scale(1.06); } }
+@keyframes twinkle { 50% { opacity: .2; transform: scale(.7); } }
+.left-badge { font-size: 12px; font-weight: 600; background: #ffe3ec; color: #d0557a; border-radius: 999px; padding: 3px 10px; vertical-align: middle; margin-left: 6px; }
 .hud-btns .icon-btn { width: 38px; height: 38px; font-size: 20px; }
 
 /* 顏色選擇 */

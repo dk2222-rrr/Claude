@@ -62,12 +62,18 @@ export function newRoom({ dogName, anniversary, myName, color }, uid) {
     petLog: {},
     photos: 1,
     score: SCORE_START,
-    setup: { cage: 'small', items: [], cageAt: 0 }, // 一開始只有小籠子
+    setup: { cage: 'small', items: [], cageAt: 0, styles: {}, owned: [] }, // 一開始只有小籠子
     hamsters: [{ id: 'h1', name: dogName, color: color || 'golden', addedAt: now }],
   };
 }
 
 export const MAX_HAMSTERS = 3;
+export const PHOTOS_PER_DAY = 5;
+export const taiwanDay = (t) => Math.floor((t + 8 * 3600e3) / 86400e3);
+export const photosLeft = (room, uid, now = Date.now()) => {
+  const l = room?.photoLog?.[uid];
+  return PHOTOS_PER_DAY - (l && l.day === taiwanDay(now) ? l.n : 0);
+};
 // 好感度：照顧得好會增加，大便放著不撿會減少；可以到商店換籠子和玩具
 export const SCORE_START = 40;
 export const POOP_PENALTY_MAX = 5; // 一坨大便最多扣 5 分
@@ -141,9 +147,16 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
     }
 
     case 'photo': {
+      // 每人每天（台灣時間）最多拍 5 張
+      const day = taiwanDay(now);
+      const log = { ...(r.photoLog || {}) };
+      const mine = log[uid]?.day === day ? log[uid].n : 0;
+      if (mine >= PHOTOS_PER_DAY) return { result: { ok: false, reason: 'limit' } };
+      log[uid] = { day, n: mine + 1 };
+      r.photoLog = log;
       r.photos = Math.min(99, (r.photos || 0) + 1);
       r.score = scoreOf(r) + 1;
-      return { room: r, event: ev('photo', { photoId: extra.photoId || null }), result: { ok: true, photos: r.photos } };
+      return { room: r, event: ev('photo', { photoId: extra.photoId || null }), result: { ok: true, photos: r.photos, left: PHOTOS_PER_DAY - mine - 1 } };
     }
 
     case 'adopt': {
@@ -187,12 +200,23 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       const item = SHOP.find((x) => x.id === extra.item);
       if (!item) return { result: { ok: false, reason: 'unknown' } };
       const setup = setupOf(r);
-      const st = shopState(item, setup);
+      const st = shopState(item, setup).s;
       if (st !== 'ok') return { result: { ok: false, reason: st } };
       if (scoreOf(r) < item.cost) return { result: { ok: false, reason: 'points' } };
       r.score = scoreOf(r) - item.cost;
-      r.setup = item.type === 'cage' ? { ...setup, cage: item.id, cageAt: now } : { ...setup, items: [...setup.items, item.id] };
-      return { room: r, event: ev('buy', { item: item.id, label: item.label }), result: { ok: true, item } };
+      if (item.kind === 'cage') r.setup = { ...setup, cage: item.id, cageAt: now };
+      else if (item.kind === 'style') r.setup = { ...setup, owned: [...setup.owned, item.id], styles: { ...setup.styles, [item.slot]: item.value } };
+      else r.setup = { ...setup, items: [...setup.items, item.id] };
+      return { room: r, event: ev('buy', { item: item.id, label: item.label, cost: item.cost }), result: { ok: true, item } };
+    }
+
+    // 換上已經擁有的風格（不用花好感度）
+    case 'equip': {
+      const item = SHOP.find((x) => x.id === extra.item);
+      const setup = setupOf(r);
+      if (!item || item.kind !== 'style' || shopState(item, setup).s !== 'equip') return { result: { ok: false } };
+      r.setup = { ...setup, styles: { ...setup.styles, [item.slot]: item.value } };
+      return { room: r, result: { ok: true, item } };
     }
 
     case 'note': {

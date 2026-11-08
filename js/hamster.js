@@ -280,18 +280,21 @@ export class Hamster {
     const f = (this.f = {
       kind,
       k: p.k,
-      moving: kind === 'move' && p.speed > 0.02,
+      moving: kind === 'move' && p.speed > 0.02 && p.mode !== 'slide',
       speed: kind === 'move' ? p.speed : 0,
       climbing: p.mode === 'climb',
-      creeping: p.mode === 'creep',
+      creeping: p.mode === 'creep' || p.mode === 'tube',
+      sliding: p.mode === 'slide',
+      rolling: p.mode === 'roll',
       jumping: p.mode === 'jump',
-      handsUp: kind === 'groom' || kind === 'eat' || kind === 'stash',
+      handsUp: kind === 'groom' || kind === 'eat' || kind === 'stash' || kind === 'gnaw',
       groom: kind === 'groom' || kind === 'stash',
-      nibble: kind === 'eat' || kind === 'drink',
+      nibble: kind === 'eat' || kind === 'drink' || kind === 'gnaw',
       drinking: kind === 'drink',
       sniffing: kind === 'sniff' || kind === 'peek' || kind === 'stand',
       tall: kind === 'stand',
-      loaf: kind === 'loaf' || kind === 'hide' || kind === 'peek' || kind === 'dig' || kind === 'burrow' || kind === 'poop' || p.mode === 'creep',
+      loaf: kind === 'loaf' || kind === 'hide' || kind === 'peek' || kind === 'dig' || kind === 'burrow' || kind === 'poop' || p.mode === 'creep' || p.mode === 'tube' || p.mode === 'slide',
+      swinging: kind === 'swinging',
       pooping: kind === 'poop',
       dig: kind === 'dig' || kind === 'burrow',
       burrow: kind === 'burrow',
@@ -427,7 +430,7 @@ export class Hamster {
     if (t > this.nextBlink) { this.blinkT = 0.12; this.nextBlink = t + 2 + Math.random() * 3; }
     if (this.blinkT > 0) this.blinkT -= dt;
     let eyeY = this.blinkT > 0 ? 0.1 : 1;
-    if (petting || f.groom || f.happy || this.bathK > 0.5) eyeY = 0.15;
+    if (petting || f.groom || f.happy || f.sliding || this.bathK > 0.5) eyeY = 0.15;
     if (f.pooping) eyeY = 0.45;
     if (sk > 0.3) eyeY = 0.1;
     this.eyes.forEach((e) => (e.scale.y = damp(e.scale.y, eyeY, 25, dt)));
