@@ -1,10 +1,12 @@
-// 3D 小倉鼠：卡通手繪風（描邊＋色階光影），平常會站起來把小手放胸前
+// 3D 小倉鼠：卡通手繪風（描邊＋色階光影）。動作由 sim.js 算出的姿勢驅動。
 import * as THREE from 'three';
 
-const TAN = new THREE.Color(0xe0a668);
-const CREAM = new THREE.Color(0xfcefd9);
-const PAW = 0xf6b7b0;
-const EAR_IN = 0x8a7470;
+export const PALETTES = {
+  golden: { label: '黃金鼠', fur: 0xe0a668, cream: 0xfcefd9, earIn: 0x8a7470, paw: 0xf6b7b0 },
+  white: { label: '奶油白', fur: 0xf6eee4, cream: 0xffffff, earIn: 0xe3aeb2, paw: 0xf7c2bc },
+  gray: { label: '銀灰鼠', fur: 0xa7a3a6, cream: 0xf3f0ec, earIn: 0x5d5558, paw: 0xf2b8b2 },
+  choco: { label: '巧克力', fur: 0x9d6c4b, cream: 0xf6e6cf, earIn: 0x5a3e33, paw: 0xeeaea6 },
+};
 const NOSE = 0xee979b;
 const INK = 0x3a2a22;
 
@@ -29,7 +31,7 @@ const GRADIENT = (() => {
   t.needsUpdate = true;
   return t;
 })();
-const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: GRADIENT, ...extra });
+export const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: GRADIENT, ...extra });
 
 // 反轉外殼描邊：沿法線往外推，厚度隨距離放大 → 螢幕上線條粗細固定
 const OUTLINE_VS = `
@@ -54,9 +56,10 @@ function outlineMat(th) {
   }
   return outlineCache[th];
 }
-function ink(mesh, th = 0.0026) {
+export function ink(mesh, th = 0.0026) {
   const o = new THREE.Mesh(mesh.geometry, outlineMat(th));
   o.raycast = () => {};
+  o.userData.outline = true;
   mesh.add(o);
   mesh.castShadow = true;
   return mesh;
@@ -82,8 +85,7 @@ function blob(mat, sx, sy, sz, x = 0, y = 0, z = 0) {
   return m;
 }
 
-// 西洋梨／蛋形的身體
-function bodyGeometry() {
+function bodyGeometry(fur, cream) {
   const pts = [];
   const N = 30;
   for (let i = 0; i <= N; i++) {
@@ -98,33 +100,34 @@ function bodyGeometry() {
   paint(g, (c, x, y, z, nx, ny, nz) => {
     let w = ss(0.0, 0.5, nz) * ss(0.62, 0.48, y);
     w = Math.max(w, ss(-0.3, -0.75, ny));
-    c.copy(TAN).lerp(CREAM, w);
+    c.copy(fur).lerp(cream, w);
   });
   return g;
 }
-
-function headGeometry() {
+function headGeometry(fur, cream) {
   const g = new THREE.SphereGeometry(1, 40, 30);
   g.scale(0.31, 0.27, 0.27);
   paint(g, (c, x, y, z, nx, ny, nz) => {
     const w = ss(0.0, -0.075, y) * ss(-0.4, 0.15, nz);
-    c.copy(TAN).lerp(CREAM, w);
+    c.copy(fur).lerp(cream, w);
   });
   return g;
 }
-
 function tube(points, r, mat) {
   const curve = new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(...p)));
   return new THREE.Mesh(new THREE.TubeGeometry(curve, 12, r, 5, false), mat);
 }
 
 export class Hamster {
-  constructor() {
+  constructor(paletteName = 'golden') {
+    const pal = PALETTES[paletteName] || PALETTES.golden;
+    const FUR = new THREE.Color(pal.fur);
+    const CREAM = new THREE.Color(pal.cream);
     const fur = toon(0xffffff, { vertexColors: true });
-    const tan = toon(TAN);
+    const tan = toon(FUR);
     const cream = toon(CREAM);
-    const pawMat = toon(PAW);
-    const earIn = toon(EAR_IN);
+    const pawMat = toon(pal.paw);
+    const earIn = toon(pal.earIn);
     const noseMat = toon(NOSE);
     const black = new THREE.MeshBasicMaterial({ color: 0x1b1614 });
     const shine = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -142,18 +145,14 @@ export class Hamster {
     this.pose.add(this.parts);
     const P = this.parts;
 
-    // 身體
-    P.add(ink(new THREE.Mesh(bodyGeometry(), fur), 0.003));
-    // 手臂（毛茸茸的小肉）
+    P.add(ink(new THREE.Mesh(bodyGeometry(FUR, CREAM), fur), 0.003));
     [-1, 1].forEach((s) => {
       const arm = ink(blob(tan, 0.085, 0.14, 0.085, s * 0.215, 0.44, 0.17));
       arm.rotation.z = s * 0.45;
       arm.rotation.x = -0.35;
       P.add(arm);
     });
-    // 小尾巴
     P.add(ink(blob(pawMat, 0.04, 0.035, 0.04, 0, 0.16, -0.3)));
-    // 背上的毛尖
     [[0.24, 0.42, -0.18, -0.9], [0.27, 0.32, -0.16, -1.1], [-0.25, 0.38, -0.17, 0.95]].forEach(([x, y, z, rz]) => {
       const t = ink(new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.09, 8), tan), 0.002);
       t.position.set(x, y, z);
@@ -161,7 +160,6 @@ export class Hamster {
       P.add(t);
     });
 
-    // 頭
     this.headPivot = new THREE.Group();
     this.headPivot.position.set(0, 0.6, 0);
     P.add(this.headPivot);
@@ -169,25 +167,19 @@ export class Hamster {
     this.head.position.set(0, 0.15, 0.02);
     this.headPivot.add(this.head);
     const H = this.head;
-    H.add(ink(new THREE.Mesh(headGeometry(), fur), 0.003));
-
-    // 頰囊（吃東西會鼓起來）
+    H.add(ink(new THREE.Mesh(headGeometry(FUR, CREAM), fur), 0.003));
     this.cheeks = [-1, 1].map((s) => {
       const c = ink(blob(cream, 0.13, 0.1, 0.12, s * 0.18, -0.085, 0.11));
       c.userData.base = c.scale.clone();
       H.add(c);
       return c;
     });
-
-    // 頭頂毛尖
     [[-0.05, 0.255, 0.02, 0.35], [0.02, 0.27, 0.03, -0.1], [0.08, 0.255, 0.0, -0.5]].forEach(([x, y, z, rz]) => {
       const t = ink(new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.07, 8), tan), 0.002);
       t.position.set(x, y, z);
       t.rotation.z = rz;
       H.add(t);
     });
-
-    // 耳朵：外圈淺褐、內耳深灰褐
     this.ears = [-1, 1].map((s) => {
       const p = new THREE.Group();
       p.position.set(s * 0.2, 0.19, -0.04);
@@ -198,8 +190,6 @@ export class Hamster {
       H.add(p);
       return p;
     });
-
-    // 眼睛：大大的黑豆眼
     this.eyes = [-1, 1].map((s) => {
       const g = new THREE.Group();
       g.position.set(s * 0.135, 0.03, 0.222);
@@ -209,15 +199,11 @@ export class Hamster {
       H.add(g);
       return g;
     });
-
-    // 鼻子＋小嘴
     this.nose = ink(blob(noseMat, 0.034, 0.024, 0.02, 0, -0.035, 0.258), 0.0018);
     H.add(this.nose);
     H.add(tube([[0, -0.055, 0.262], [0, -0.075, 0.258]], 0.0045, inkLine));
     H.add(tube([[-0.028, -0.09, 0.25], [-0.012, -0.08, 0.258], [0, -0.075, 0.259]], 0.0045, inkLine));
     H.add(tube([[0.028, -0.09, 0.25], [0.012, -0.08, 0.258], [0, -0.075, 0.259]], 0.0045, inkLine));
-
-    // 鬍鬚
     this.whiskers = new THREE.Group();
     H.add(this.whiskers);
     [-1, 1].forEach((s) => {
@@ -226,12 +212,6 @@ export class Hamster {
       });
     });
 
-    // 嘴巴前叼東西的位置
-    this.mouth = new THREE.Object3D();
-    this.mouth.position.set(0, -0.1, 0.26);
-    H.add(this.mouth);
-
-    // 後腳（粉紅小腳掌＋腳趾）與前掌（站起來時是小手）
     const footGeo = (len) => {
       const g = new THREE.Group();
       g.add(ink(blob(pawMat, 0.065, 0.03, len)));
@@ -252,317 +232,179 @@ export class Hamster {
       this.rollG.add(g);
       return g;
     });
+    // 兩手中間：捧著食物的位置
+    this.holdPoint = new THREE.Object3D();
+    this.rollG.add(this.holdPoint);
 
     this.root.traverse((o) => {
-      if (o.isMesh && o.material.type !== 'ShaderMaterial') o.castShadow = true;
+      if (o.isMesh && !o.userData.outline) o.castShadow = true;
     });
 
-    // 狀態
+    // 動畫狀態
     this.heading = 0;
-    this.mood = 'ok';
-    this.t = 0;
-    this.speed = 0;
+    this.pos = new THREE.Vector3();
+    this.inited = false;
+    this.t = Math.random() * 10;
     this.walk = 0;
     this.walkPhase = 0;
-    this.quadK = 0; // 0 站著 1 四腳著地
-    this.petT = 0;
-    this.nextBlink = 2;
-    this.blinkT = 0;
-    this.hop = 0;
-    this.lift = 0; // 所在高度（二樓、進滾輪、沙盆）
-    this.slope = 0; // 爬坡角度
-    this.loaf = false; // 趴著休息
-    this.handsUp = false;
-    this.nibble = false;
-    this.groom = false;
-    this.sleeping = false;
+    this.quadK = 0;
+    this.handUpK = 0;
     this.sleepK = 0;
-    this.bathing = false;
     this.bathK = 0;
-    this.climbing = false;
+    this.runK = 0;
     this.cheekFill = 0;
     this.cheekTarget = 0;
-    this.cheekDrain = 0.1;
-    this.runK = 0;
-    this.queue = [];
-    this.cur = null;
-    this.look = null;
+    this.nextBlink = 2;
+    this.blinkT = 0;
     this.nextTwitch = 1;
     this.twitchT = 0;
+    this.slope = 0;
+    this.f = {}; // 本幀的姿勢旗標
+    this.look = null;
     this._v = new THREE.Vector3();
   }
 
-  get busy() {
-    return !!this.cur || this.queue.length > 0;
+  // p：sim.poseAt() 的結果
+  drive(p, dt) {
+    const target = this._v.set(p.pos.x, p.pos.y, p.pos.z);
+    if (!this.inited || this.pos.distanceTo(target) > 0.9) {
+      this.pos.copy(target);
+      this.inited = true;
+      if (p.heading != null) this.heading = p.heading;
+    } else {
+      const k = 1 - Math.exp(-16 * dt);
+      this.pos.lerp(target, k);
+    }
+    const kind = p.kind;
+    let wantHeading = p.heading;
+    const f = (this.f = {
+      kind,
+      k: p.k,
+      moving: kind === 'move' && p.speed > 0.02,
+      speed: kind === 'move' ? p.speed : 0,
+      climbing: p.mode === 'climb',
+      creeping: p.mode === 'creep',
+      jumping: p.mode === 'jump',
+      handsUp: kind === 'groom' || kind === 'eat' || kind === 'stash',
+      groom: kind === 'groom' || kind === 'stash',
+      nibble: kind === 'eat' || kind === 'drink',
+      drinking: kind === 'drink',
+      sniffing: kind === 'sniff' || kind === 'peek' || kind === 'stand',
+      tall: kind === 'stand',
+      loaf: kind === 'loaf' || kind === 'hide' || kind === 'peek' || kind === 'dig' || p.mode === 'creep',
+      dig: kind === 'dig',
+      sleeping: kind === 'sleep' || kind === 'nap',
+      bathing: kind === 'bath',
+      running: kind === 'wheelRun',
+      happy: kind === 'happy',
+      shake: kind === 'shake',
+      squeeze: p.place === 'tunnel', // 在隧道裡壓低身體
+    });
+    // 開心：連跳三下＋轉一圈
+    let hop = 0;
+    if (f.happy) {
+      hop = Math.abs(Math.sin(p.k * Math.PI * 3)) * 0.1;
+      if (wantHeading != null) wantHeading += ss(0.3, 0.8, p.k) * Math.PI * 2;
+    }
+    if (f.shake) hop = Math.abs(Math.sin(p.k * Math.PI * 4)) * 0.05;
+    if (kind === 'arrive') hop = (1 - p.k) * (1 - p.k) * 0.9;
+    this.hop = hop;
+    if (wantHeading != null) {
+      if (f.happy) this.heading = this.heading + angleDiff(this.heading, wantHeading) * Math.min(1, dt * 20);
+      else this.heading += angleDiff(this.heading, wantHeading) * Math.min(1, dt * 10);
+    }
+    this.slope = damp(this.slope, p.slope || 0, 10, dt);
+    if (kind === 'eat' && p.foodKind === 'kibble') this.cheekTarget = Math.min(1, p.k * 1.3);
+    if (kind === 'stash') this.cheekTarget = 0;
   }
-  setMood(m) { this.mood = m; }
 
-  /* ---- 任務 ---- */
-  run(task) {
-    return new Promise((res) => this.queue.push({ ...task, res }));
-  }
-  cancel() {
-    const all = [this.cur, ...this.queue].filter(Boolean);
-    this.cur = null;
-    this.queue = [];
-    this.speed = 0;
-    all.forEach((t) => { t.end?.(); t.res(); });
-  }
-  moveTo(x, z, speed = 0.8) {
-    return this.run({
-      update: (dt) => {
-        const dx = x - this.root.position.x;
-        const dz = z - this.root.position.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist < 0.03) { this.speed = 0; return true; }
-        const target = Math.atan2(dx, dz);
-        this.heading += angleDiff(this.heading, target) * Math.min(1, dt * 12);
-        const facing = Math.abs(angleDiff(this.heading, target)) < 0.5;
-        this.speed = (facing ? speed : speed * 0.15) * Math.min(1, 0.3 + this.quadK);
-        const step = Math.min(dist, this.speed * dt);
-        this.root.position.x += (dx / dist) * step;
-        this.root.position.z += (dz / dist) * step;
-        return false;
-      },
-    });
-  }
-  // 沿斜坡爬上／爬下
-  climbTo(x, y, z, speed = 0.7) {
-    let from;
-    let len;
-    return this.run({
-      start: () => {
-        from = { x: this.root.position.x, y: this.lift, z: this.root.position.z };
-        len = Math.hypot(x - from.x, y - from.y, z - from.z) || 1;
-        this.climbing = true;
-        const run = Math.hypot(x - from.x, z - from.z) || 1;
-        this.slope = Math.atan2(y - from.y, run);
-      },
-      update: (dt, t) => {
-        const k = Math.min(1, (t * speed) / len);
-        this.speed = speed;
-        this.root.position.x = lerp(from.x, x, k);
-        this.root.position.z = lerp(from.z, z, k);
-        this.lift = lerp(from.y, y, k);
-        return k >= 1;
-      },
-      end: () => { this.climbing = false; this.slope = 0; this.speed = 0; },
-    });
-  }
-  face(angle) {
-    return this.run({
-      update: (dt) => {
-        const d = angleDiff(this.heading, angle);
-        this.heading += d * Math.min(1, dt * 10);
-        return Math.abs(d) < 0.03;
-      },
-    });
-  }
-  faceTowards(x, z) {
-    return this.run({
-      update: (dt) => {
-        const a = Math.atan2(x - this.root.position.x, z - this.root.position.z);
-        const d = angleDiff(this.heading, a);
-        this.heading += d * Math.min(1, dt * 10);
-        return Math.abs(d) < 0.03;
-      },
-    });
-  }
-  jumpTo(x, y, z, dur = 0.45) {
-    let from;
-    return this.run({
-      start: () => (from = { x: this.root.position.x, y: this.lift, z: this.root.position.z }),
-      update: (dt, t) => {
-        const k = Math.min(1, t / dur);
-        this.root.position.x = lerp(from.x, x, k);
-        this.root.position.z = lerp(from.z, z, k);
-        this.lift = lerp(from.y, y, k) + Math.sin(k * Math.PI) * 0.12;
-        if (k >= 1) this.lift = y;
-        return k >= 1;
-      },
-    });
-  }
-  wait(sec, onUpdate) {
-    return this.run({ update: (dt, t) => (onUpdate?.(t, dt), t >= sec) });
-  }
-  eat(sec, onBite) {
-    let bites = 0;
-    return this.run({
-      start: () => { this.handsUp = true; this.nibble = true; },
-      update: (dt, t) => {
-        const b = Math.floor(t / 0.5);
-        if (b > bites) { bites = b; onBite?.(b); this.cheekTarget = Math.min(1, this.cheekTarget + 0.15); }
-        return t >= sec;
-      },
-      end: () => { this.handsUp = false; this.nibble = false; },
-    });
-  }
-  drink(sec) {
-    return this.run({
-      start: () => { this.nibble = true; this.drinking = true; },
-      update: (dt, t) => t >= sec,
-      end: () => { this.nibble = false; this.drinking = false; },
-    });
-  }
-  groomFor(sec) {
-    return this.run({
-      start: () => { this.handsUp = true; this.groom = true; },
-      update: (dt, t) => t >= sec,
-      end: () => { this.handsUp = false; this.groom = false; },
-    });
-  }
-  // 把頰囊裡的食物吐出來藏好
-  stash(sec = 1.6) {
-    return this.run({
-      start: () => { this.handsUp = true; this.groom = true; this.cheekDrain = 0.9; },
-      update: (dt, t) => t >= sec,
-      end: () => { this.handsUp = false; this.groom = false; this.cheekDrain = 0.1; },
-    });
-  }
-  sniff(sec = 1.2) {
-    return this.run({
-      start: () => (this.sniffing = true),
-      update: (dt, t) => t >= sec,
-      end: () => (this.sniffing = false),
-    });
-  }
-  rest(sec) {
-    return this.run({
-      start: () => (this.loaf = true),
-      update: (dt, t) => t >= sec,
-      end: () => (this.loaf = false),
-    });
-  }
-  bathe(sec, onUpdate) {
-    return this.run({
-      start: () => (this.bathing = true),
-      update: (dt, t) => (onUpdate?.(t, dt), t >= sec),
-      end: () => (this.bathing = false),
-    });
-  }
-  hops(n = 2) {
-    return this.run({
-      update: (dt, t) => {
-        const k = t / 0.3;
-        this.hop = Math.sin((k % 1) * Math.PI) * 0.1;
-        if (k >= n) { this.hop = 0; return true; }
-        return false;
-      },
-    });
-  }
-  spin() {
-    const from = this.heading;
-    return this.run({
-      update: (dt, t) => {
-        const k = Math.min(1, t / 0.8);
-        this.heading = from + k * Math.PI * 2;
-        this.hop = Math.sin(k * Math.PI) * 0.12;
-        if (k >= 1) { this.heading = from; this.hop = 0; return true; }
-        return false;
-      },
-    });
-  }
-  petted() { this.petT = 1.2; }
-
-  /* ---- 每一幀 ---- */
   update(dt) {
     this.t += dt;
     const t = this.t;
-    if (!this.cur && this.queue.length) {
-      this.cur = this.queue.shift();
-      this.cur.t = 0;
-      this.cur.start?.();
-    }
-    if (this.cur) {
-      this.cur.t += dt;
-      if (this.cur.update(dt, this.cur.t)) {
-        const c = this.cur;
-        this.cur = null;
-        c.end?.();
-        c.res();
-      }
-    } else this.speed = 0;
-
-    const m = this.mood;
-    const sad = m === 'sad' || m === 'hungry';
-    const petting = this.petT > 0;
+    const f = this.f;
+    const petting = (this.petT || 0) > 0;
     if (petting) this.petT -= dt;
-    this.sleepK = damp(this.sleepK, this.sleeping ? 1 : 0, 3, dt);
-    this.bathK = damp(this.bathK, this.bathing ? 1 : 0, 6, dt);
+    this.sleepK = damp(this.sleepK, f.sleeping ? 1 : 0, 3, dt);
+    this.bathK = damp(this.bathK, f.bathing ? 1 : 0, 6, dt);
+    this.runK = damp(this.runK, f.running ? 1 : 0, 5, dt);
     const sk = this.sleepK;
 
-    // 站姿 ↔ 四腳著地
-    const moving = this.speed > 0.05 || this.runK > 0.1;
-    const wantQuad = moving || this.climbing || this.sleeping || this.bathing || this.loaf || (sad && !this.handsUp && !this.drinking);
+    const moving = f.moving || this.runK > 0.1 || f.dig;
+    const wantQuad = moving || f.climbing || f.sleeping || f.bathing || f.loaf || f.jumping;
     this.quadK = damp(this.quadK, wantQuad ? 1 : 0, moving ? 14 : 7, dt);
     const q = this.quadK;
 
-    // 小碎步
-    const stepSpeed = this.runK > 0.1 ? 3 * this.runK : this.speed;
+    const stepSpeed = this.runK > 0.1 ? 3 * this.runK : f.dig ? 1.6 : f.speed || 0;
     this.walk = damp(this.walk, moving ? 1 : 0, 14, dt);
     this.walkPhase += dt * (8 + stepSpeed * 22);
     const sw = Math.sin(this.walkPhase);
-    const cw = Math.cos(this.walkPhase);
 
-    // 身體姿勢
     const breathe = Math.sin(t * (sk > 0.5 ? 1.5 : 3.2)) * (0.012 + sk * 0.02);
+    this.root.position.set(this.pos.x, this.pos.y + (this.hop || 0), this.pos.z);
     this.root.rotation.y = this.heading;
-    this.root.position.y = this.lift + this.hop * 0.5;
     this.rollG.rotation.x = -this.slope;
     const roll = this.bathK * Math.sin(t * 3.6) * 1.25;
-    this.rollG.rotation.z = roll + (petting ? Math.sin(t * 16) * 0.06 : 0);
+    const wiggle = petting ? Math.sin(t * 16) * 0.06 : f.shake ? Math.sin(t * 30) * 0.12 : 0;
+    this.rollG.rotation.z = roll + wiggle;
     this.rollG.position.y = 0.3 - this.bathK * 0.08;
-    const theta = q * (1.3 + sk * 0.15) - (this.drinking ? 0.25 : 0);
+    const theta = q * (1.3 + sk * 0.15) - (f.drinking ? 0.25 : 0) - (f.tall ? 0.12 : 0) + (f.dig ? Math.sin(t * 18) * 0.05 : 0);
     this.pose.rotation.x = theta;
-    this.pose.position.y = q * 0.07 - sk * 0.05 + Math.abs(sw) * 0.02 * this.walk;
-    this.parts.scale.set(1 + breathe + sk * 0.06, 1 - breathe * 0.4 - sk * 0.12, 1 + sk * 0.04);
+    this.pose.position.y = q * 0.07 - sk * 0.05 + Math.abs(sw) * 0.02 * this.walk + (f.tall ? 0.05 : 0);
+    const tallS = f.tall ? 1.08 : 1;
+    this.squeezeK = damp(this.squeezeK || 0, f.squeeze ? 1 : 0, 8, dt);
+    const sq = this.squeezeK;
+    this.parts.scale.set(1 + breathe + sk * 0.06 + sq * 0.05, (1 - breathe * 0.4 - sk * 0.12) * tallS, (1 + sk * 0.04) * (1 - sq * 0.18));
+    this.pose.position.y -= sq * 0.06;
     this.pose.updateMatrix();
 
     // 頭
-    let pitch = sad ? 0.25 : 0;
-    if (this.nibble) pitch = 0.2 + Math.sin(t * 22) * 0.05;
-    if (this.drinking) pitch = -0.5 + Math.sin(t * 14) * 0.04;
-    if (this.groom) pitch = 0.3 + Math.sin(t * 7) * 0.08;
-    if (this.climbing) pitch = this.slope * 0.6;
+    let pitch = 0;
+    if (f.nibble) pitch = 0.2 + Math.sin(t * 22) * 0.05;
+    if (f.drinking) pitch = -0.5 + Math.sin(t * 14) * 0.04;
+    if (f.groom) pitch = 0.3 + Math.sin(t * 7) * 0.08;
+    if (f.climbing) pitch = this.slope * 0.6;
+    if (f.dig) pitch = 0.35;
+    if (f.tall) pitch = -0.35;
     pitch = lerp(pitch, 0.55, sk);
+    pitch += (this.squeezeK || 0) * 0.45;
     let yaw = 0;
-    if (this.sniffing) yaw = Math.sin(t * 2.2) * 0.6;
-    else if (this.look && !moving && !this.nibble && sk < 0.1 && this.bathK < 0.1) {
+    if (f.sniffing) yaw = Math.sin(t * 2.2) * 0.6;
+    else if (this.look && !moving && !f.nibble && sk < 0.1 && this.bathK < 0.1) {
       const lp = this.root.worldToLocal(this._v.copy(this.look));
       yaw = Math.max(-0.7, Math.min(0.7, Math.atan2(lp.x, Math.max(0.3, lp.z))));
     }
+    const happyTilt = f.happy || petting ? Math.sin(t * 8) * 0.15 : 0;
     this.headPivot.rotation.x = damp(this.headPivot.rotation.x, -theta * 0.92 + pitch, 9, dt);
     this.headPivot.rotation.y = damp(this.headPivot.rotation.y, yaw, 6, dt);
-    this.headPivot.rotation.z = damp(this.headPivot.rotation.z, petting ? Math.sin(t * 8) * 0.15 : 0, 5, dt);
+    this.headPivot.rotation.z = damp(this.headPivot.rotation.z, happyTilt, 5, dt);
 
-    // 手：胸前 ↔ 嘴邊 ↔ 地上
-    const handUp = this.handsUp ? 1 : 0;
-    this.handUpK = damp(this.handUpK || 0, handUp, 10, dt);
+    // 手：胸前 ↔ 嘴邊 ↔ 地上（挖土時兩手輪流扒）
+    this.handUpK = damp(this.handUpK, f.handsUp ? 1 : 0, 10, dt);
+    const holdP = new THREE.Vector3();
     this.hands.forEach((hd) => {
       const s = hd.userData.side;
-      const rub = this.groom ? Math.sin(t * 14 + s) * 0.04 : 0;
-      const nib = this.nibble ? Math.sin(t * 22) * 0.01 : 0;
+      const rub = f.groom ? Math.sin(t * 14 + s) * 0.04 : 0;
+      const nib = f.nibble ? Math.sin(t * 22) * 0.01 : 0;
       const chest = this._v.set(s * 0.085, 0.115, 0.29).applyMatrix4(this.pose.matrix);
       const cx = lerp(chest.x, s * 0.05, this.handUpK);
       const cy = lerp(chest.y, chest.y + 0.2 + rub + nib, this.handUpK);
       const cz = lerp(chest.z, chest.z + 0.05, this.handUpK);
+      const dig = f.dig ? Math.sin(t * 20 + (s > 0 ? Math.PI : 0)) : 0;
       const step = sw * s * 0.07 * this.walk;
       hd.position.set(
         lerp(cx, s * 0.12, q),
-        lerp(cy, -0.27 + Math.max(0, -sw * s) * 0.04 * this.walk, q),
-        lerp(cz, 0.3 + step, q),
+        lerp(cy, -0.27 + Math.max(0, -sw * s) * 0.04 * this.walk + Math.max(0, dig) * 0.06, q),
+        lerp(cz, 0.3 + step + dig * 0.05, q),
       );
       hd.rotation.x = lerp(-0.4, 0, q);
+      holdP.add(hd.position);
     });
-    this.feet.forEach((f) => {
-      const s = f.userData.side;
+    this.holdPoint.position.copy(holdP.multiplyScalar(0.5)).add(this._v.set(0, 0.03, 0.05));
+    this.feet.forEach((ft) => {
+      const s = ft.userData.side;
       const step = -sw * s * 0.07 * this.walk;
-      f.position.set(
-        lerp(s * 0.15, s * 0.17, q),
-        -0.27 + Math.max(0, sw * s) * 0.04 * this.walk + (1 - q) * 0.0,
-        lerp(0.13, -0.2 + step, q),
-      );
-      f.rotation.y = s * lerp(0.35, 0.1, q);
+      ft.position.set(lerp(s * 0.15, s * 0.17, q), -0.27 + Math.max(0, sw * s) * 0.04 * this.walk, lerp(0.13, -0.2 + step, q));
+      ft.rotation.y = s * lerp(0.35, 0.1, q);
     });
 
     // 耳朵
@@ -570,7 +412,7 @@ export class Hamster {
     if (this.twitchT > 0) this.twitchT -= dt;
     this.ears.forEach((e) => {
       const s = e.userData.side;
-      const flat = Math.max(sad ? 0.5 : 0, sk, this.bathK * 0.6);
+      const flat = Math.max(sk, this.bathK * 0.6, f.creeping || f.squeeze ? 0.9 : 0);
       const tw = this.twitchT > 0 && s === this.twitchSide ? 0.35 : 0;
       e.rotation.x = damp(e.rotation.x, -flat * 0.9 - tw, 12, dt);
       e.rotation.z = damp(e.rotation.z, -s * (0.5 + flat * 0.3), 8, dt);
@@ -579,22 +421,23 @@ export class Hamster {
     // 眼睛
     if (t > this.nextBlink) { this.blinkT = 0.12; this.nextBlink = t + 2 + Math.random() * 3; }
     if (this.blinkT > 0) this.blinkT -= dt;
-    let eyeY = this.blinkT > 0 ? 0.1 : sad ? 0.7 : 1;
-    if (petting || this.groom || this.bathK > 0.5) eyeY = 0.15;
+    let eyeY = this.blinkT > 0 ? 0.1 : 1;
+    if (petting || f.groom || f.happy || this.bathK > 0.5) eyeY = 0.15;
     if (sk > 0.3) eyeY = 0.1;
     this.eyes.forEach((e) => (e.scale.y = damp(e.scale.y, eyeY, 25, dt)));
 
-    // 鼻子嗅嗅、鬍鬚抖抖
-    const sniffAmt = this.sniffing ? 1 : 0.35;
+    const sniffAmt = f.sniffing ? 1 : 0.35;
     this.nose.scale.y = 0.024 * (1 + Math.max(0, Math.sin(t * 18)) * 0.25 * sniffAmt);
     this.whiskers.rotation.x = Math.sin(t * 18) * 0.03 * sniffAmt;
 
-    // 頰囊
-    if (!this.nibble) this.cheekTarget = Math.max(0, this.cheekTarget - dt * this.cheekDrain);
+    // 頰囊（外觀用，各自慢慢消）
+    if (!(f.kind === 'eat')) this.cheekTarget = Math.max(0, this.cheekTarget - dt * (f.kind === 'stash' ? 0.9 : 0.05));
     this.cheekFill = damp(this.cheekFill, this.cheekTarget, 5, dt);
     this.cheeks.forEach((c) => {
       const k = 1 + this.cheekFill * 0.7;
       c.scale.set(c.userData.base.x * k, c.userData.base.y * (1 + this.cheekFill * 0.45), c.userData.base.z * (1 + this.cheekFill * 0.3));
     });
   }
+
+  petted() { this.petT = 1.2; }
 }

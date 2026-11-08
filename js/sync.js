@@ -58,7 +58,7 @@ function localBackend() {
       const r = load(code);
       return !!(r && r.members[uid]);
     },
-    subscribe(code, onRoom, onEvents) {
+    subscribe(code, onRoom, onEvents, since = 0) {
       const l = {
         code,
         fn: () => {
@@ -66,7 +66,7 @@ function localBackend() {
           if (!r) return;
           const { events = [], ...room } = r;
           onRoom(room);
-          onEvents(events);
+          onEvents(events.filter((e) => e.at >= since).sort((a, b) => a.at - b.at));
         },
       };
       listeners.add(l);
@@ -78,7 +78,8 @@ function localBackend() {
       const { events = [], ...room } = r;
       const out = applyAction(room, type, uid, extra, Date.now());
       if (out.room) {
-        const ev = out.event ? [out.event, ...events].slice(0, 150) : events;
+        const keep = Date.now() - 3 * 86400000;
+        const ev = out.event ? [out.event, ...events].filter((e) => e.at >= keep).slice(0, 4000) : events;
         save(code, { ...out.room, events: ev });
       }
       return out.result;
@@ -128,9 +129,9 @@ async function firebaseBackend(cfg) {
       const s = await fs.getDoc(roomRef(code));
       return s.exists() && !!s.data().members[uid];
     },
-    subscribe(code, onRoom, onEvents) {
+    subscribe(code, onRoom, onEvents, since = 0) {
       const u1 = fs.onSnapshot(roomRef(code), (s) => s.exists() && onRoom(s.data()));
-      const q = fs.query(evCol(code), fs.orderBy('at', 'desc'), fs.limit(150));
+      const q = fs.query(evCol(code), fs.where('at', '>=', since), fs.orderBy('at'));
       const u2 = fs.onSnapshot(q, (qs) => onEvents(qs.docs.map((d) => ({ id: d.id, ...d.data() }))));
       return () => { u1(); u2(); };
     },

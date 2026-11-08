@@ -35,11 +35,6 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 h1 { font-size: 22px; margin: 0; letter-spacing: 1px; }
 .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
 .hud-btns { display: flex; gap: 8px; }
-.cam-btn {
-  position: absolute; right: 14px; bottom: calc(100px + var(--safe-bottom));
-  background: var(--card); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border-radius: 999px; padding: 7px 12px; font-size: 13px; box-shadow: var(--shadow);
-}
 .icon-btn { font-size: 22px; width: 40px; height: 40px; border-radius: 50%; background: #fff; box-shadow: var(--shadow); }
 .stats { display: flex; gap: 14px; margin-top: 10px; }
 .stat { flex: 1; font-size: 12px; }
@@ -61,7 +56,7 @@ h1 { font-size: 22px; margin: 0; letter-spacing: 1px; }
 }
 
 .care-hint {
-  position: absolute; left: 0; right: 0; bottom: calc(142px + var(--safe-bottom));
+  position: absolute; left: 0; right: 0; bottom: calc(110px + var(--safe-bottom));
   text-align: center; font-size: 12px; color: var(--muted); pointer-events: none; padding: 0 20px;
 }
 
@@ -80,21 +75,53 @@ h1 { font-size: 22px; margin: 0; letter-spacing: 1px; }
 .bubble.sleep { background: #eef1ff; color: #7b84b8; font-weight: 600; }
 .bubble.sleep::after { border-top-color: #eef1ff; }
 
-/* ---------- 底部按鈕 ---------- */
-#actions {
-  position: absolute; left: 12px; right: 12px; bottom: calc(12px + var(--safe-bottom));
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+/* ---------- 下方托盤 ---------- */
+#tray {
+  position: absolute; left: 10px; right: 10px; bottom: calc(10px + var(--safe-bottom));
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px;
 }
-#actions button {
+.tray-item, .tray-btn {
   background: var(--card); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border-radius: 20px; padding: 10px 0 8px; box-shadow: var(--shadow);
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  transition: transform .12s;
+  border-radius: 20px; padding: 9px 0 7px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  touch-action: none; transition: transform .12s, opacity .2s;
 }
-#actions button:active { transform: scale(.92); }
-#actions button b { font-size: 24px; line-height: 1.2; }
-#actions button span { font-size: 12px; color: var(--muted); }
-#actions button.disabled { opacity: .5; }
+.tray-item { cursor: grab; border: 2px dashed transparent; }
+.tray-item:active, .tray-btn:active { transform: scale(.93); }
+.tray-item b, .tray-btn b { font-size: 25px; line-height: 1.2; }
+.tray-item span, .tray-btn span { font-size: 11.5px; color: var(--muted); display: flex; flex-direction: column; align-items: center; line-height: 1.25; }
+.tray-item small { font-size: 10px; color: #d28aa0; }
+.tray-item.locked { opacity: .5; }
+.tray-btn em { font-style: normal; background: var(--pink); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 10.5px; }
+.tray-btn span { flex-direction: row; gap: 3px; }
+.drag-ghost {
+  position: fixed; z-index: 20; font-size: 40px; transform: translate(-50%, -50%) scale(1.1);
+  pointer-events: none; filter: drop-shadow(0 6px 8px rgba(0,0,0,.25));
+}
+.gesture-hint {
+  position: absolute; left: 0; right: 0; bottom: calc(92px + var(--safe-bottom));
+  text-align: center; font-size: 11px; color: var(--muted); pointer-events: none; opacity: .85;
+}
+#flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 30; }
+#flash.go { animation: flash .45s ease-out; }
+@keyframes flash { 0% { opacity: .95; } 100% { opacity: 0; } }
+img.photo { width: 100%; border-radius: 18px; box-shadow: var(--shadow); margin-bottom: 10px; }
+
+/* 顏色選擇 */
+.swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.swatch { display: flex !important; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px !important; cursor: pointer; }
+.swatch input { display: none; }
+.swatch i { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 2px #f0dce2; }
+.swatch input:checked + i { box-shadow: 0 0 0 3px var(--pink); }
+.ham-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+details.adopt { background: #fff; border-radius: 16px; padding: 10px 14px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+details.adopt summary { cursor: pointer; color: var(--pink); font-weight: 600; font-size: 14px; }
+details.adopt .form { margin-top: 10px; }
+
+/* 晚上 */
+body.night { background: linear-gradient(180deg, #2b2d4a 0%, #3d3a5c 55%, #4a4060 100%); }
+body.night .care-hint, body.night .gesture-hint { color: #cfc8e6; }
 
 /* ---------- 提示與特效 ---------- */
 #toasts {

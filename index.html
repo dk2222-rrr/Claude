@@ -33,7 +33,7 @@
         </div>
       </div>
       <div class="stats">
-        <div class="stat"><span>🌻 飽足</span><div class="bar"><i id="barFull"></i></div></div>
+        <div class="stat"><span>🥣 飽足</span><div class="bar"><i id="barFull"></i></div></div>
         <div class="stat"><span>💗 心情</span><div class="bar"><i id="barJoy"></i></div></div>
       </div>
       <div class="level">
@@ -45,15 +45,18 @@
     <div id="banner" class="hidden"></div>
     <div id="bubble" class="bubble hidden"></div>
     <div id="careHint" class="care-hint"></div>
-    <button id="btnCam" class="cam-btn">🔍 看全景</button>
+    <div class="gesture-hint">點倉鼠會開心 · 拖曳旋轉 · 兩指縮放 · 點兩下回原位</div>
 
-    <nav id="actions">
-      <button data-act="feed"><b>🌻</b><span>餵食</span></button>
-      <button data-act="wheel"><b>🎡</b><span>滾輪</span></button>
-      <button data-act="bath"><b>🛁</b><span>洗澡</span></button>
-      <button data-act="sleep"><b>💤</b><span>哄睡</span></button>
-      <button data-act="note"><b>💌</b><span>傳話</span></button>
+    <!-- 下方托盤：把飼料拖進籠子 -->
+    <nav id="tray">
+      <div class="tray-item" data-kind="kibble"><b>🥣</b><span>飼料</span></div>
+      <div class="tray-item" data-kind="seed"><b>🌻</b><span>葵花籽<small>1 張照</small></span></div>
+      <div class="tray-item" data-kind="fish"><b>🐟</b><span>小魚乾<small>2 張照</small></span></div>
+      <button id="btnPhoto" class="tray-btn"><b>📷</b><span>拍照 <em id="photoCount">0</em></span></button>
+      <button id="btnNote" class="tray-btn"><b>💌</b><span>傳話</span></button>
     </nav>
+    <div id="dragGhost" class="drag-ghost hidden"></div>
+    <div id="flash"></div>
     <div id="toasts"></div>
     <div id="fx"></div>
   </div>
@@ -63,15 +66,16 @@
     <div class="setup-card">
       <div class="logo">🐹</div>
       <h2>一起養倉鼠</h2>
-      <p class="muted">兩個人一起照顧一隻小倉鼠</p>
+      <p class="muted">兩個人一起照顧小倉鼠</p>
       <div class="tabs">
         <button class="tab active" data-tab="create">建立新家</button>
         <button class="tab" data-tab="join">加入另一半的家</button>
       </div>
       <form id="createForm" class="form">
         <label>你的暱稱<input name="myName" maxlength="12" required placeholder="例如：阿明" /></label>
-        <label>倉鼠的名字<input name="dogName" maxlength="12" required value="布丁" /></label>
-        <label>你們的紀念日（也是倉鼠生日）<input name="anniversary" type="date" required /></label>
+        <label>倉鼠的名字<input name="dogName" maxlength="10" required value="布丁" /></label>
+        <div class="swatches" id="colorPick"></div>
+        <label>你們的紀念日<input name="anniversary" type="date" required /></label>
         <button class="primary" type="submit">領養倉鼠 🐹</button>
       </form>
       <form id="joinForm" class="form hidden">
@@ -84,7 +88,6 @@
     </div>
   </section>
 
-  <!-- 對話框 -->
   <div id="sheet" class="sheet-backdrop hidden">
     <div class="sheet">
       <button class="sheet-close" aria-label="關閉">✕</button>

@@ -1,26 +1,35 @@
 import { World } from './world.js';
+import { Sim, hash, dayAnchor, isNight, nightStartBefore } from './sim.js';
+import { PALETTES } from './hamster.js';
 import { createBackend } from './sync.js';
-import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW } from './state.js';
+import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST } from './state.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const SESSION_KEY = 'pup-session' + (new URLSearchParams(location.search).get('as') || '');
+const FOOD_LABEL = { kibble: '飼料', seed: '葵花籽', fish: '小魚乾' };
+const FOOD_EMOJI = { kibble: '🥣', seed: '🌻', fish: '🐟' };
 
 let backend;
 let world;
-let session = null; // { code }
+let sim;
+let session = null;
 let room = null;
-let events = [];
+let serverEvents = [];
+const pending = new Map(); // 還沒同步回來的自己的事件（先在本機模擬，畫面才不會延遲）
 let unsub = null;
+let subAnchor = 0;
 let firstRoom = true;
 let firstEvents = true;
 const seen = new Set();
 let lastPetSeen = 0;
 let lastComboSeen = 0;
 let lastPartnerPetToast = 0;
-let lastPetSent = 0;
-let tempBubble = null; // { text, until }
+const lastPetSent = {};
+let lastPhotoAt = 0;
+let tempBubble = null;
 let nextChatter = 0;
+let focusId = null; // 對話泡泡跟著哪一隻
 
 /* ---------------- 啟動 ---------------- */
 async function boot() {
@@ -29,10 +38,13 @@ async function boot() {
   $('#loading').classList.add('hidden');
   if (session && (await backend.exists(session.code).catch(() => false))) enterHome();
   else showSetup();
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+}
 
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
+function colorPicker(name, selected = 'golden') {
+  return Object.entries(PALETTES).map(([k, p]) => `
+    <label class="swatch"><input type="radio" name="${name}" value="${k}" ${k === selected ? 'checked' : ''} />
+      <i style="background:#${p.fur.toString(16).padStart(6, '0')}"></i><span>${p.label}</span></label>`).join('');
 }
 
 function showSetup() {
@@ -41,6 +53,7 @@ function showSetup() {
   const today = new Date();
   const iso = new Date(today.getTime() - today.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
   $('#createForm').anniversary.value ||= iso;
+  $('#colorPick').innerHTML = colorPicker('color');
   $('#modeNote').textContent = backend.mode === 'cloud'
     ? '☁️ 已連上雲端，兩支手機會即時同步'
     : '📱 目前是單機試玩模式（尚未設定 Firebase），資料只存在這台裝置';
@@ -60,12 +73,11 @@ $('#createForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
   try {
-    const code = await backend.createRoom({ myName: f.myName.value.trim(), dogName: f.dogName.value.trim(), anniversary: f.anniversary.value });
+    const code = await backend.createRoom({ myName: f.myName.value.trim(), dogName: f.dogName.value.trim(), anniversary: f.anniversary.value, color: f.color.value });
     saveSession(code);
     enterHome(true);
   } catch (err) { $('#setupError').textContent = err.message; }
 });
-
 $('#joinForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
@@ -76,7 +88,6 @@ $('#joinForm').addEventListener('submit', async (e) => {
     enterHome();
   } catch (err) { $('#setupError').textContent = err.message; }
 });
-
 function saveSession(code) {
   session = { code };
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -86,15 +97,24 @@ function enterHome(justCreated = false) {
   $('#setup').classList.add('hidden');
   $('#app').classList.remove('hidden');
   if (!world) {
-    world = new World($('#scene'));
-    world.onFrame = positionBubble;
-    if (location.search.includes('debug')) window.world = world;
+    sim = new Sim();
+    world = new World($('#scene'), sim);
+    world.onFrame = onFrame;
+    if (location.search.includes('debug')) Object.assign(window, { world, sim });
     bindScene();
+    bindTray();
   }
   firstRoom = firstEvents = true;
-  unsub?.();
-  unsub = backend.subscribe(session.code, onRoom, onEvents);
+  subscribe();
   if (justCreated) setTimeout(() => openSettings(true), 600);
+}
+
+// 只需要「昨晚 21:00 之後」的事件：模擬每天早上 8:00 從窩裡重新開始
+function subscribe() {
+  unsub?.();
+  subAnchor = dayAnchor(Date.now());
+  serverEvents = [];
+  unsub = backend.subscribe(session.code, onRoom, onEvents, nightStartBefore(subAnchor) - 60000);
 }
 
 /* ---------------- 資料更新 ---------------- */
@@ -103,7 +123,21 @@ const partner = () => {
   const id = Object.keys(room?.members || {}).find((k) => k !== me());
   return id ? { id, ...room.members[id] } : null;
 };
-const petName = () => room?.dog?.name || '倉鼠';
+const hams = () => hamstersOf(room);
+const hamName = (id) => hams().find((h) => h.id === id)?.name || '倉鼠';
+const allNames = () => hams().map((h) => h.name).join('、');
+
+function mergedEvents() {
+  const ids = new Set(serverEvents.map((e) => e.id));
+  for (const id of pending.keys()) if (ids.has(id)) pending.delete(id);
+  return serverEvents.concat([...pending.values()]);
+}
+function feedSim() {
+  if (!room || !sim) return;
+  world.setHamsters(hams());
+  sim.setInputs(hash(session.code), hams(), mergedEvents(), Date.now());
+  sim.advance(Date.now() + 30000);
+}
 
 function onRoom(r) {
   const prev = room;
@@ -113,58 +147,51 @@ function onRoom(r) {
     lastPetSeen = r.lastPet?.at || 0;
     lastComboSeen = r.combo?.at || 0;
   } else {
-    // 另一半正在摸摸
     const lp = r.lastPet;
     if (lp && lp.at > lastPetSeen) {
       lastPetSeen = lp.at;
-      if (lp.by !== me()) {
-        world.ham.petted();
-        if (Date.now() - lastPartnerPetToast > 20000 && !lp.used) {
-          lastPartnerPetToast = Date.now();
-          toast(`💞 ${lp.byName} 正在摸摸${petName()}！${TOGETHER_WINDOW / 1000} 秒內一起摸有加成`);
-        }
+      if (lp.by !== me() && Date.now() - lastPartnerPetToast > 20000 && !lp.used) {
+        lastPartnerPetToast = Date.now();
+        toast(`💞 ${lp.byName} 正在摸倉鼠！${TOGETHER_WINDOW / 1000} 秒內你也摸一下有加成`);
       }
     }
     if (r.combo && r.combo.at > lastComboSeen) {
       lastComboSeen = r.combo.at;
-      celebrateTogether(r.combo.names);
+      burst(innerWidth / 2, innerHeight * 0.5, 18, ['💞', '💗', '💖', '✨']);
+      toast(`💞 ${r.combo.names.join(' 和 ')} 一起摸摸！心情 +20`);
     }
     if (prev && Object.keys(prev.members).length < 2 && Object.keys(r.members).length === 2) {
-      toast(`🎉 ${partner()?.name} 回家了！現在你們可以一起照顧${petName()}`);
+      toast(`🎉 ${partner()?.name} 回家了！現在你們可以一起照顧${allNames()}`);
     }
   }
+  feedSim();
   render();
 }
 
 function onEvents(list) {
-  events = list;
+  serverEvents = list;
   if (firstEvents) {
     firstEvents = false;
     list.forEach((e) => seen.add(e.id));
-    return;
+  } else {
+    for (const e of list) {
+      if (seen.has(e.id)) continue;
+      seen.add(e.id);
+      if (e.by === me() || Date.now() - e.at > 60000) continue;
+      if (e.type === 'drop') toast(`${FOOD_EMOJI[e.kind]} ${e.byName} 放了${FOOD_LABEL[e.kind]}`);
+      if (e.type === 'adopt') toast(`🐹 ${e.byName} 帶 ${e.name} 回家了！`);
+      if (e.type === 'note') toast(`💌 ${e.byName} 傳話給你`);
+      if (e.type === 'photo') toast(`📷 ${e.byName} 拍了一張照片`);
+    }
   }
-  // 另一半剛做的事 → 在這支手機上也播放動畫
-  [...list].reverse().forEach((e) => {
-    if (seen.has(e.id)) return;
-    seen.add(e.id);
-    if (e.by === me() || Date.now() - e.at > 60000) return;
-    if (e.type === 'feed') { toast(`🌻 ${e.byName} 餵了${petName()}`); if (!world.userBusy) world.feed(); }
-    if (e.type === 'wheel') { toast(`🎡 ${e.byName} 叫${petName()}去跑滾輪`); if (!world.userBusy) world.runWheel(); }
-    if (e.type === 'bath') { toast(`🛁 ${e.byName} 幫${petName()}洗沙浴`); if (!world.userBusy) world.bath(); }
-    if (e.type === 'sleep') { toast(`💤 ${e.byName} 哄${petName()}睡覺了`); if (!world.userBusy) world.putToSleep(); }
-    if (e.type === 'note') { toast(`💌 ${e.byName} 透過${petName()}傳話給你`); world.happyHop(); }
-  });
+  feedSim();
 }
 
 /* ---------------- 畫面 ---------------- */
-function currentDog() {
-  return room ? withDecay(room.dog) : null;
-}
-
 function render() {
   if (!room) return;
-  const d = currentDog();
-  $('#dogName').textContent = d.name;
+  const d = withDecay(room.dog);
+  $('#dogName').textContent = allNames();
   const days = daysTogether(d.anniversary);
   $('#daysTogether').textContent = `在一起第 ${days} 天 · ${Object.values(room.members).map((m) => m.name).join(' ♥ ')}`;
   setBar('#barFull', d.fullness);
@@ -172,14 +199,20 @@ function render() {
   const lv = levelInfo(d.love);
   $('#levelText').textContent = `Lv.${lv.level} ${lv.title}`;
   $('#barLove').style.width = `${Math.round(lv.progress * 100)}%`;
-  world.ham.setMood(moodOf(d));
+  $('#photoCount').textContent = room.photos || 0;
+  document.querySelectorAll('.tray-item').forEach((el) => {
+    el.classList.toggle('locked', (room.photos || 0) < SNACK_COST[el.dataset.kind]);
+  });
 
+  const night = isNight(Date.now());
+  world.setNight(night);
+  document.body.classList.toggle('night', night);
   let banner = '';
-  if (isAnniversaryDay(d.anniversary)) banner = `🎂 今天是紀念日，也是${d.name}的生日！`;
+  if (night) banner = '🌙 睡覺時間（21:00–08:00），小聲一點喔';
+  else if (isAnniversaryDay(d.anniversary)) banner = `🎂 今天是紀念日！`;
   else if (days % 100 === 0) banner = `🎉 在一起第 ${days} 天！`;
   $('#banner').textContent = banner;
   $('#banner').classList.toggle('hidden', !banner);
-
   $('#careHint').textContent = careHint();
 }
 
@@ -192,12 +225,12 @@ function setBar(sel, v) {
 function todayTally() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const t = {};
-  Object.keys(room.members).forEach((id) => (t[id] = { feed: 0, wheel: 0, bath: 0, pet: 0, note: 0, sleep: 0, total: 0 }));
-  events.filter((e) => e.at >= start.getTime()).forEach((e) => {
+  Object.keys(room.members).forEach((id) => (t[id] = { kibble: 0, seed: 0, fish: 0, pet: 0, photo: 0, note: 0, total: 0 }));
+  mergedEvents().filter((e) => e.at >= start.getTime()).forEach((e) => {
     const x = t[e.by];
     if (!x) return;
-    const k = e.type === 'together' ? 'pet' : e.type;
-    if (k in x) x[k]++;
+    if (e.type === 'drop') x[e.kind]++;
+    else if (e.type in x) x[e.type]++;
     x.total++;
   });
   return t;
@@ -207,15 +240,25 @@ function careHint() {
   const p = partner();
   if (!p) return '把家庭碼傳給另一半，一起養吧 ✨（⚙️ 設定裡）';
   const t = todayTally();
-  const a = t[me()]?.total || 0;
-  const b = t[p.id]?.total || 0;
-  if (a === 0 && b === 0) return `今天還沒有人照顧${petName()}喔`;
-  if (a + 2 <= b) return `今天 ${p.name} 照顧比較多，換你陪陪${petName()}吧`;
-  if (b + 2 <= a) return `今天你辛苦了！也提醒 ${p.name} 來看看${petName()} 💕`;
+  const a = (t[me()]?.kibble || 0) + (t[me()]?.seed || 0) + (t[me()]?.fish || 0);
+  const b = (t[p.id]?.kibble || 0) + (t[p.id]?.seed || 0) + (t[p.id]?.fish || 0);
+  if (a === 0 && b === 0) return '今天還沒有人放飼料喔：從下面拖進籠子裡';
+  if (a + 2 <= b) return `今天 ${p.name} 餵比較多，換你放點飼料吧`;
+  if (b + 2 <= a) return `今天你餵比較多！也提醒 ${p.name} 來看看 💕`;
   return '今天你們分工得很平均 👍';
 }
 
-setInterval(() => room && render(), 5000);
+let lastRender = 0;
+let lastAnchorCheck = 0;
+function onFrame(now) {
+  if (now - lastAnchorCheck > 1000) {
+    lastAnchorCheck = now;
+    if (session && room && dayAnchor(now) !== subAnchor) { subscribe(); }
+    if (sim?.ready && dayAnchor(now) !== sim.A) feedSim();
+  }
+  if (now - lastRender > 5000) { lastRender = now; render(); }
+  positionBubble(now);
+}
 
 /* ---------------- 對話泡泡 ---------------- */
 function unreadNote() {
@@ -224,122 +267,238 @@ function unreadNote() {
   const read = Number(localStorage.getItem('pup-noteRead-' + session.code) || 0);
   return n.at > read ? n : null;
 }
-
-function say(text, sec = 3) {
+function say(text, sec = 3, id) {
   tempBubble = { text, until: performance.now() + sec * 1000 };
+  if (id) focusId = id;
 }
-
 const CHATTER = {
-  happy: ['今天好開心！', '吱！最喜歡你們了 💕', '想跑滾輪～🎡', '摸摸我～'],
-  ok: ['吱？', '有沒有瓜子…', '今天過得好嗎？'],
+  happy: ['今天好開心！', '吱！最喜歡你們了 💕', '摸摸我～', '有沒有葵花籽？🌻'],
+  ok: ['吱？', '肚子有點餓…', '今天過得好嗎？'],
 };
-
-const banner = () => !$('#banner').classList.contains('hidden');
+const KIND_TALK = {
+  wheelRun: '衝呀～！🎡', bath: '沙浴好舒服～', hide: '', peek: '偷看～👀', dig: '挖挖挖…', eat: '好吃！', drink: '咕嘟咕嘟',
+};
 
 function positionBubble() {
   const el = $('#bubble');
-  if (!room) return;
+  if (!room || !sim?.ready) return;
+  const ids = sim.hamsterIds();
+  if (!ids.length) return;
+  if (!focusId || !ids.includes(focusId)) focusId = ids[0];
+  const pose = sim.poseAt(focusId, Date.now());
+  const hidden = ['tunnel', 'house'].includes(pose?.place);
   const now = performance.now();
   const note = unreadNote();
+  const mood = moodOf(withDecay(room.dog));
   let html = '';
   let cls = 'bubble';
-  if (note && !world.userBusy && !world.sleeping) {
+  if (note && !hidden) {
     html = `💌 <b>${esc(note.byName)}</b> 說：<br>${esc(note.text)}<br><small style="color:#b98">（點一下收下）</small>`;
     cls += ' note';
   } else if (tempBubble && tempBubble.until > now) {
     html = esc(tempBubble.text);
-  } else if (world.sleeping) {
+  } else if (pose && (pose.kind === 'sleep' || pose.kind === 'nap')) {
     html = 'Zzz… 💤';
     cls += ' sleep';
-  } else if (!world.userBusy) {
-    const m = world.ham.mood;
-    if (m === 'hungry') html = '肚子好餓… 🌻';
-    else if (m === 'sad') html = '好想你們… 摸摸我嘛 🥺';
+  } else if (!hidden && pose) {
+    if (mood === 'hungry') html = '肚子好餓… 🥣';
+    else if (mood === 'sad') html = '好想你們… 摸摸我嘛 🥺';
     else if (now > nextChatter) {
-      nextChatter = now + 15000 + Math.random() * 20000;
-      const list = CHATTER[m] || CHATTER.ok;
-      say(list[Math.floor(Math.random() * list.length)], 3.5);
+      nextChatter = now + 14000 + Math.random() * 18000;
+      const t = KIND_TALK[pose.kind];
+      const list = CHATTER[mood] || CHATTER.ok;
+      if (t !== '') say(t || list[Math.floor(Math.random() * list.length)], 3.2);
     }
   }
-  if (!html) { el.classList.add('hidden'); el.dataset.html = ''; return; }
+  const p = world.headScreenPos(focusId);
+  if (!html || !p || (hidden && !html.startsWith('💌')) || !p.inView) { el.classList.add('hidden'); el.dataset.html = ''; return; }
   if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
   el.className = cls;
-  const p = world.headScreenPos();
   el.style.left = `${Math.max(90, Math.min(innerWidth - 90, p.x))}px`;
-  el.style.top = `${Math.max(banner() ? 250 : 200, p.y)}px`;
+  el.style.top = `${Math.max(!$('#banner').classList.contains('hidden') ? 250 : 200, p.y)}px`;
 }
-
 $('#bubble').addEventListener('click', () => {
   const n = unreadNote();
   if (!n) return;
   localStorage.setItem('pup-noteRead-' + session.code, String(n.at));
   const r = $('#bubble').getBoundingClientRect();
   burst(r.left + r.width / 2, r.top + r.height / 2, 8, ['💌', '💕', '💗']);
-  world.happyHop();
 });
 
-/* ---------------- 互動 ---------------- */
+/* ---------------- 送出事件（先在本機模擬，再同步） ---------------- */
+const newId = (at) => `${at}-${Math.random().toString(36).slice(2, 8)}`;
+// delay：讓事件在「稍後」才發生，另一支手機收到時動作還沒開始 → 兩邊同時演出
+async function sendEvent(type, extra, delay = 0) {
+  const at = Date.now() + delay;
+  const evId = newId(at);
+  const local = { id: evId, at, type, by: me(), byName: room.members[me()]?.name, ...extra };
+  pending.set(evId, local);
+  feedSim();
+  const res = await backend.act(session.code, type, { ...extra, at, evId }).catch(() => ({ ok: false }));
+  if (!res?.ok) { pending.delete(evId); feedSim(); }
+  return res;
+}
+
+/* ---------------- 籠子裡的手勢：點倉鼠＝摸摸、拖曳＝旋轉、兩指＝縮放／平移 ---------------- */
 function bindScene() {
   const canvas = $('#scene');
-  let rubbing = false;
-  let lastRub = 0;
+  const ptrs = new Map();
+  let g = null;
+  let lastTap = 0;
   canvas.addEventListener('pointerdown', (e) => {
-    world.setLook(e.clientX, e.clientY);
-    if (world.hitHamster(e.clientX, e.clientY)) {
-      rubbing = true;
-      pet(e.clientX, e.clientY);
+    canvas.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 1) g = { type: 'pending', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, t: performance.now(), ham: world.pickHamster(e.clientX, e.clientY) };
+    else if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      g = { type: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
     }
   });
   canvas.addEventListener('pointermove', (e) => {
-    world.setLook(e.clientX, e.clientY);
-    if (rubbing && performance.now() - lastRub > 220 && world.hitHamster(e.clientX, e.clientY)) {
-      lastRub = performance.now();
-      pet(e.clientX, e.clientY);
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!g) return;
+    if (g.type === 'pinch' && ptrs.size >= 2) {
+      const [a, b] = [...ptrs.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      if (d > 10) world.zoom(g.d / d);
+      world.pan(mx - g.mx, my - g.my);
+      Object.assign(g, { d, mx, my });
+      return;
     }
+    const dx = e.clientX - g.lx;
+    const dy = e.clientY - g.ly;
+    if (g.type === 'pending' && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) > 8) g.type = g.ham ? 'rub' : 'orbit';
+    if (g.type === 'orbit') world.orbit(dx, dy);
+    if (g.type === 'rub') {
+      const id = world.pickHamster(e.clientX, e.clientY);
+      if (id && performance.now() - (g.lastRub || 0) > 220) { g.lastRub = performance.now(); pet(id, e.clientX, e.clientY); }
+    }
+    g.lx = e.clientX;
+    g.ly = e.clientY;
   });
-  const stop = () => (rubbing = false);
-  canvas.addEventListener('pointerup', stop);
-  canvas.addEventListener('pointercancel', stop);
+  const end = (e) => {
+    ptrs.delete(e.pointerId);
+    if (g?.type === 'pending' && performance.now() - g.t < 500) {
+      if (g.ham) pet(g.ham, e.clientX, e.clientY);
+      else {
+        if (performance.now() - lastTap < 320) world.resetView();
+        lastTap = performance.now();
+      }
+    }
+    if (ptrs.size === 0) g = null;
+    else if (ptrs.size === 1 && g?.type === 'pinch') { const [a] = [...ptrs.values()]; g = { type: 'orbit', lx: a.x, ly: a.y }; }
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('wheel', (e) => { e.preventDefault(); world.zoom(Math.exp(e.deltaY * 0.0012)); }, { passive: false });
 }
 
-async function pet(x, y) {
-  world.touch();
-  if (world.sleeping) {
-    world.wake();
-    say('唔…被吵醒了 😪', 2);
-  }
-  world.ham.petted();
-  burst(x, y, 2);
+function pet(id, x, y) {
+  focusId = id;
+  world.rigs[id]?.ham.petted();
   navigator.vibrate?.(10);
-  if (Date.now() - lastPetSent < 2000) return;
-  lastPetSent = Date.now();
-  await backend.act(session.code, 'pet'); // 「一起摸摸」的慶祝由 onRoom 觸發
-}
-
-function celebrateTogether(names = []) {
-  burst(innerWidth / 2, innerHeight * 0.5, 18, ['💞', '💗', '💖', '✨']);
-  toast(`💞 ${names.join(' 和 ')} 一起摸摸！心情 +20`);
-  say('最喜歡你們兩個了！！', 3);
-  world.celebrate();
-}
-
-document.querySelectorAll('#actions button').forEach((b) => b.addEventListener('click', () => onAction(b.dataset.act)));
-
-async function onAction(act) {
-  if (!room) return;
-  if (act === 'log') return openLog();
-  if (act === 'note') return openNote();
-  const res = await backend.act(session.code, act);
-  if (!res?.ok) {
-    if (res?.reason === 'full') { say('頰囊塞不下了啦～ 😋', 2); world.happyHop(); }
-    if (res?.reason === 'hungry') say('太餓了，玩不動… 🍖', 2.5);
-    return;
+  const pose = sim.poseAt(id, Date.now());
+  if (pose && (pose.kind === 'sleep' || (isNight(Date.now()) && pose.kind === 'nap'))) {
+    burst(x, y, 1, ['💤']);
+    say(isNight(Date.now()) ? '呼…呼…（睡覺時間別吵牠）' : '唔…', 2, id);
+  } else {
+    burst(x, y, 2);
+    if (Math.random() < 0.3) say(['吱吱！好舒服～', '最喜歡你了 💕', '再摸摸～'][Math.floor(Math.random() * 3)], 2, id);
   }
-  if (act === 'feed') { say('瓜子！瓜子！🌻', 1.5); world.feed().then(() => !world.sleeping && say('塞滿頰囊了！謝謝 💕', 2.5)); }
-  if (act === 'wheel') { say('衝呀～！', 1.5); world.runWheel(); }
-  if (act === 'bath') { say('沙浴時間！', 1.5); world.bath().then(() => !world.sleeping && say('洗得香香的 ✨', 2.5)); }
-  if (act === 'sleep') { say('呼啊…想睡了', 2); world.putToSleep(); }
+  if (Date.now() - (lastPetSent[id] || 0) < 1500) return;
+  lastPetSent[id] = Date.now();
+  sendEvent('pet', { hid: id }, 400);
 }
+
+/* ---------------- 拖曳飼料／零食 ---------------- */
+function bindTray() {
+  const ghost = $('#dragGhost');
+  let drag = null;
+  document.querySelectorAll('.tray-item').forEach((el) => {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const kind = el.dataset.kind;
+      if ((room?.photos || 0) < SNACK_COST[kind]) {
+        toast(`📷 ${FOOD_LABEL[kind]}要 ${SNACK_COST[kind]} 張照片換，先幫牠們拍照吧！`);
+        return;
+      }
+      drag = { kind, id: e.pointerId };
+      ghost.textContent = FOOD_EMOJI[kind];
+      ghost.classList.remove('hidden');
+      moveGhost(e);
+    });
+  });
+  const moveGhost = (e) => {
+    ghost.style.left = `${e.clientX}px`;
+    ghost.style.top = `${e.clientY - 30}px`;
+    const pt = e.clientY < $('#tray').getBoundingClientRect().top - 10 ? world.dropPoint(e.clientX, e.clientY - 30) : null;
+    world.showMarker(pt);
+    drag.pt = pt;
+  };
+  window.addEventListener('pointermove', (e) => { if (drag && e.pointerId === drag.id) moveGhost(e); });
+  const finish = async (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const { kind, pt } = drag;
+    drag = null;
+    ghost.classList.add('hidden');
+    world.showMarker(null);
+    if (!pt) return;
+    const res = await sendEvent('drop', { kind, x: pt.x, y: pt.y, z: pt.z, level: pt.level });
+    if (!res?.ok && res?.reason === 'photos') toast('照片不夠換零食了 📷');
+    else if (res?.ok && isNight(Date.now())) toast('牠們在睡覺，明天早上 8 點起床就會吃 🌙');
+  };
+  window.addEventListener('pointerup', finish);
+  window.addEventListener('pointercancel', finish);
+}
+
+/* ---------------- 拍照 ---------------- */
+$('#btnPhoto').addEventListener('click', async () => {
+  if (!room) return;
+  const flash = $('#flash');
+  flash.classList.remove('go');
+  void flash.offsetWidth;
+  flash.classList.add('go');
+  const src = world.capture();
+  const img = await new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = src; });
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0);
+  const s = c.width / 400;
+  g.font = `600 ${14 * s}px -apple-system, "PingFang TC", sans-serif`;
+  g.fillStyle = 'rgba(255,255,255,0.85)';
+  const d = new Date();
+  const label = `🐹 ${allNames()} · ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  g.fillText(label, 14 * s, c.height - 16 * s);
+  const url = c.toDataURL('image/jpeg', 0.9);
+
+  const visible = world.visibleHamsters().length > 0;
+  const counts = visible && Date.now() - lastPhotoAt > 4000;
+  let gained = '';
+  if (counts) {
+    lastPhotoAt = Date.now();
+    const res = await backend.act(session.code, 'photo', { at: Date.now() });
+    if (res?.ok) gained = `📷 +1（現在有 ${res.photos} 張，可以換零食）`;
+  }
+  openSheet(`
+    <h3>📸 拍好了！</h3>
+    <img class="photo" src="${url}" alt="照片" />
+    <p class="muted">${gained || (visible ? '太快了，等一下再拍才算數喔' : '要拍到倉鼠才能換零食喔')}</p>
+    <div class="row"><button class="primary" id="savePhoto">儲存／分享</button></div>
+    <p class="mode-note">🌻 葵花籽＝1 張照片　🐟 小魚乾＝2 張照片</p>`);
+  $('#savePhoto').addEventListener('click', async () => {
+    const blob = await (await fetch(url)).blob();
+    const file = new File([blob], `hamster-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    try {
+      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });
+      else { const a = document.createElement('a'); a.href = url; a.download = file.name; a.click(); }
+    } catch {}
+  });
+});
 
 /* ---------------- 抽屜：傳話 / 紀錄 / 設定 ---------------- */
 function openSheet(html) {
@@ -349,53 +508,49 @@ function openSheet(html) {
 function closeSheet() { $('#sheet').classList.add('hidden'); }
 $('#sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet' || e.target.closest('.sheet-close')) closeSheet(); });
 
-function openNote() {
+$('#btnNote').addEventListener('click', () => {
+  if (!room) return;
   const p = partner();
   openSheet(`
-    <h3>💌 透過${esc(petName())}傳話</h3>
-    <p class="muted" style="text-align:left">${p ? `${esc(p.name)} 打開 app 時，${esc(petName())}會把這句話帶給對方看` : '另一半加入後就能收到你的話喔'}</p>
+    <h3>💌 透過倉鼠傳話</h3>
+    <p class="muted" style="text-align:left">${p ? `${esc(p.name)} 打開 app 時，倉鼠會把這句話帶給對方看` : '另一半加入後就能收到你的話喔'}</p>
     <form class="form" id="noteForm">
       <textarea name="text" maxlength="120" placeholder="今天也辛苦了，晚上一起吃飯？"></textarea>
-      <button class="primary" type="submit">交給${esc(petName())} 🐹</button>
+      <button class="primary" type="submit">交給倉鼠 🐹</button>
     </form>`);
   $('#noteForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = e.target.text.value.trim();
     if (!text) return;
     const res = await backend.act(session.code, 'note', { text });
-    if (res?.ok) {
-      closeSheet();
-      toast(`${petName()}收到了，會幫你送過去 💌`);
-      world.happyHop();
-    }
+    if (res?.ok) { closeSheet(); toast('倉鼠收到了，會幫你送過去 💌'); }
   });
-}
+});
 
 const EV_TEXT = {
-  feed: (e) => `🌻 ${e.byName} 餵了瓜子`,
-  wheel: (e) => `🎡 ${e.byName} 叫牠跑滾輪`,
-  sleep: (e) => `💤 ${e.byName} 哄睡覺`,
-  bath: (e) => `🛁 ${e.byName} 幫牠洗沙浴`,
-  pet: (e) => `✋ ${e.byName} 摸摸`,
+  drop: (e) => `${FOOD_EMOJI[e.kind]} ${e.byName} 放了${FOOD_LABEL[e.kind]}`,
+  pet: (e) => (e.together ? `💞 ${e.with} 和 ${e.byName} 一起摸 ${hamName(e.hid)}` : null),
   note: (e) => `💌 ${e.byName}：「${e.text}」`,
-  together: (e) => `💞 ${e.with} 和 ${e.byName} 一起摸摸`,
+  photo: (e) => `📷 ${e.byName} 拍了照片`,
+  adopt: (e) => `🐹 ${e.byName} 帶 ${e.name} 回家`,
 };
-
 function fmtTime(at) {
   const d = new Date(at);
   const today = new Date().toDateString() === d.toDateString();
   const hm = d.toTimeString().slice(0, 5);
   return today ? `今天 ${hm}` : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 }
-
 function openLog() {
   const t = todayTally();
   const tallyHtml = Object.entries(room.members).map(([id, m]) => {
     const x = t[id] || {};
     return `<div><div class="who">${esc(m.name)}${id === me() ? '（你）' : ''}</div>
-      <div class="nums">🌻 餵食 ${x.feed || 0}　🎡 滾輪 ${x.wheel || 0}<br>🛁 洗澡 ${x.bath || 0}　💤 哄睡 ${x.sleep || 0}<br>✋ 摸摸 ${x.pet || 0}　💌 傳話 ${x.note || 0}</div></div>`;
+      <div class="nums">🥣 飼料 ${x.kibble || 0}　🌻 ${x.seed || 0}　🐟 ${x.fish || 0}<br>✋ 摸摸 ${x.pet || 0}　📷 拍照 ${x.photo || 0}</div></div>`;
   }).join('');
-  const items = events.slice(0, 60).map((e) => `<li><time>${fmtTime(e.at)}</time><span>${esc((EV_TEXT[e.type] || (() => e.type))(e))}</span></li>`).join('');
+  const items = [...mergedEvents()].reverse().map((e) => {
+    const txt = EV_TEXT[e.type]?.(e);
+    return txt ? `<li><time>${fmtTime(e.at)}</time><span>${esc(txt)}</span></li>` : '';
+  }).filter(Boolean).slice(0, 60).join('');
   openSheet(`
     <h3>📒 照顧紀錄</h3>
     <div class="section-title">今天的分工</div>
@@ -406,31 +561,50 @@ function openLog() {
 
 function openSettings(welcome = false) {
   const d = room.dog;
+  const list = hams();
   const joinUrl = `${location.origin}${location.pathname}?join=${session.code}`;
   openSheet(`
     <h3>${welcome ? '🎉 領養成功！' : '⚙️ 設定'}</h3>
-    ${welcome ? `<p class="muted" style="text-align:left">把家庭碼傳給另一半，對方選「加入另一半的家」輸入就能一起養 ${esc(d.name)}。</p>` : ''}
+    ${welcome ? `<p class="muted" style="text-align:left">把家庭碼傳給另一半，對方選「加入另一半的家」輸入就能一起養。</p>` : ''}
     <div class="code-box"><div><div class="sub">家庭碼</div><b>${session.code}</b></div><button class="secondary" id="copyCode">複製邀請</button></div>
     <div class="members">${Object.entries(room.members).map(([id, m]) => `<span class="chip">${id === me() ? '🙋 ' : '💕 '}${esc(m.name)}</span>`).join('')}${Object.keys(room.members).length < 2 ? '<span class="chip">⏳ 等另一半加入</span>' : ''}</div>
-    <form class="form" id="dogForm">
-      <label>倉鼠名字<input name="name" maxlength="12" value="${esc(d.name)}" /></label>
+
+    <div class="section-title">🐹 籠子裡的倉鼠（${list.length}/${MAX_HAMSTERS}）</div>
+    <div class="ham-list">${list.map((h) => `<span class="chip"><i class="dot" style="background:#${(PALETTES[h.color] || PALETTES.golden).fur.toString(16).padStart(6, '0')}"></i>${esc(h.name)}</span>`).join('')}</div>
+    ${list.length < MAX_HAMSTERS ? `
+    <details class="adopt"><summary>＋ 再領養一隻（最多 ${MAX_HAMSTERS} 隻）</summary>
+      <form class="form" id="adoptForm">
+        <label>名字<input name="name" maxlength="10" required placeholder="例如：麻糬" /></label>
+        <div class="swatches">${colorPicker('color', ['white', 'gray', 'choco'][list.length - 1] || 'golden')}</div>
+        <button class="primary" type="submit">帶牠回家 🏠</button>
+      </form>
+    </details>` : ''}
+
+    <form class="form" id="dogForm" style="margin-top:14px">
       <label>紀念日<input name="anniversary" type="date" value="${esc(d.anniversary)}" /></label>
       <label>我的暱稱<input name="myName" maxlength="12" value="${esc(room.members[me()]?.name)}" /></label>
       <button class="primary" type="submit">儲存</button>
     </form>
-    <p class="mode-note" style="margin-top:14px">${backend.mode === 'cloud' ? '☁️ 雲端同步中' : '📱 單機試玩模式：設定 Firebase 後兩支手機才會同步（見 README）'}</p>
+    <p class="mode-note" style="margin-top:14px">${backend.mode === 'cloud' ? '☁️ 雲端同步中：兩支手機看到的倉鼠動作一樣' : '📱 單機試玩模式：設定 Firebase 後兩支手機才會同步（見 README）'}</p>
     <div class="row" style="margin-top:12px"><button class="secondary" id="leaveHome">離開這個家</button></div>`);
   $('#copyCode').addEventListener('click', async () => {
-    const text = `來跟我一起養 ${d.name} 🐶\n家庭碼：${session.code}\n${joinUrl}`;
+    const text = `來跟我一起養 ${allNames()} 🐹\n家庭碼：${session.code}\n${joinUrl}`;
     try {
       if (navigator.share) await navigator.share({ text });
       else { await navigator.clipboard.writeText(text); toast('已複製邀請 ✨'); }
     } catch {}
   });
+  $('#adoptForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const res = await backend.act(session.code, 'adopt', { name: f.name.value.trim(), color: f.color.value, at: Date.now() });
+    if (res?.ok) { closeSheet(); toast(`🎉 ${res.hamster.name} 來到新家了！`); focusId = res.hamster.id; }
+    else if (res?.reason === 'max') toast(`一個籠子最多 ${MAX_HAMSTERS} 隻喔`);
+  });
   $('#dogForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
-    await backend.act(session.code, 'setDog', { name: f.name.value.trim(), anniversary: f.anniversary.value });
+    await backend.act(session.code, 'setDog', { anniversary: f.anniversary.value });
     if (f.myName.value.trim()) await backend.act(session.code, 'rename', { name: f.myName.value.trim() });
     closeSheet();
     toast('已儲存 ✅');
@@ -446,10 +620,6 @@ function openSettings(welcome = false) {
 }
 $('#btnSettings').addEventListener('click', () => room && openSettings());
 $('#btnLog').addEventListener('click', () => room && openLog());
-$('#btnCam').addEventListener('click', () => {
-  const m = world.toggleCamera();
-  $('#btnCam').textContent = m === 'follow' ? '🔍 看全景' : '🐹 跟著牠';
-});
 
 /* ---------------- 小工具 ---------------- */
 function toast(text) {
@@ -459,7 +629,6 @@ function toast(text) {
   $('#toasts').appendChild(el);
   setTimeout(() => el.remove(), 3300);
 }
-
 function burst(x, y, n = 3, emojis = ['💗', '💕', '❤️']) {
   for (let i = 0; i < n; i++) {
     const h = document.createElement('div');

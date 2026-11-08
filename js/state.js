@@ -49,7 +49,7 @@ export function moodOf(dog) {
   return 'ok';
 }
 
-export function newRoom({ dogName, anniversary, myName }, uid) {
+export function newRoom({ dogName, anniversary, myName, color }, uid) {
   const now = Date.now();
   return {
     createdAt: now,
@@ -59,68 +59,92 @@ export function newRoom({ dogName, anniversary, myName }, uid) {
     combo: null,
     note: null,
     petLog: {},
+    photos: 1,
+    hamsters: [{ id: 'h1', name: dogName, color: color || 'golden', addedAt: now }],
   };
+}
+
+export const MAX_HAMSTERS = 3;
+export const SNACK_COST = { kibble: 0, seed: 1, fish: 2 };
+
+// 舊資料沒有 hamsters 欄位時，用原本的名字補一隻
+export function hamstersOf(room) {
+  if (room?.hamsters?.length) return room.hamsters;
+  return [{ id: 'h1', name: room?.dog?.name || '布丁', color: 'golden', addedAt: room?.createdAt || 0 }];
 }
 
 /**
  * 套用一個動作。回傳 { room?, event?, result }
  * room 有值才需要寫回；event 有值才寫進紀錄。
+ * extra.at / extra.evId：事件的時間和 id 由畫面先決定，兩支手機的模擬才會一致。
  */
 export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
+  if (extra.at) now = extra.at;
   const r = JSON.parse(JSON.stringify(room));
   const d = (r.dog = withDecay(r.dog, now));
   const me = r.members?.[uid]?.name || '?';
   const ev = (t, more = {}) => ({
-    id: `${now}-${Math.random().toString(36).slice(2, 7)}`,
+    id: extra.evId || `${now}-${Math.random().toString(36).slice(2, 7)}`,
     type: t, by: uid, byName: me, at: now, ...more,
   });
+  const n = Math.max(1, hamstersOf(r).length);
 
   switch (type) {
-    case 'feed':
-      if (d.fullness >= 90) return { result: { ok: false, reason: 'full' } };
-      d.fullness = clamp(d.fullness + 30);
-      d.joy = clamp(d.joy + 4);
-      d.love += 2;
-      return { room: r, event: ev('feed'), result: { ok: true } };
-
-    case 'wheel':
-      if (d.fullness < 10) return { result: { ok: false, reason: 'hungry' } };
-      d.joy = clamp(d.joy + 12);
-      d.fullness = clamp(d.fullness - 4);
-      d.love += 2;
-      return { room: r, event: ev('wheel'), result: { ok: true } };
-
-    case 'bath':
-      d.joy = clamp(d.joy + 10);
-      d.love += 2;
-      return { room: r, event: ev('bath'), result: { ok: true } };
-
-    case 'sleep':
-      d.joy = clamp(d.joy + 3);
-      return { room: r, event: ev('sleep'), result: { ok: true } };
+    // 把飼料／零食放進籠子
+    case 'drop': {
+      const kind = extra.kind in SNACK_COST ? extra.kind : 'kibble';
+      const cost = SNACK_COST[kind];
+      if ((r.photos || 0) < cost) return { result: { ok: false, reason: 'photos' } };
+      r.photos = (r.photos || 0) - cost;
+      if (kind === 'kibble') { d.fullness = clamp(d.fullness + 24 / n); d.love += 1; }
+      if (kind === 'seed') { d.fullness = clamp(d.fullness + 6 / n); d.joy = clamp(d.joy + 10); d.love += 2; }
+      if (kind === 'fish') { d.fullness = clamp(d.fullness + 10 / n); d.joy = clamp(d.joy + 18); d.love += 3; }
+      const { x, y, z, level } = extra;
+      return { room: r, event: ev('drop', { kind, x, y, z, level }), result: { ok: true } };
+    }
 
     case 'pet': {
       const lp = r.lastPet;
       let together = false;
-      let event = null;
       if (lp && lp.by !== uid && now - lp.at < TOGETHER_WINDOW && !lp.used) {
         together = true;
         d.joy = clamp(d.joy + 20);
         d.love += 5;
         r.combo = { at: now, names: [lp.byName, me] };
-        event = ev('together', { with: lp.byName });
       }
       const prev = (r.petLog || {})[uid] || 0;
       if (now - prev > 60000) {
         d.joy = clamp(d.joy + 5);
         d.love += 1;
         r.petLog = { ...(r.petLog || {}), [uid]: now };
-        event = event || ev('pet');
       } else {
         d.joy = clamp(d.joy + 1);
       }
       r.lastPet = { by: uid, byName: me, at: now, used: together };
-      return { room: r, event, result: { ok: true, together } };
+      // 每次都要寫事件：兩支手機的倉鼠要同時開心
+      return { room: r, event: ev('pet', { hid: extra.hid, together, with: together ? lp.byName : null }), result: { ok: true, together } };
+    }
+
+    case 'photo': {
+      r.photos = Math.min(99, (r.photos || 0) + 1);
+      return { room: r, event: ev('photo'), result: { ok: true, photos: r.photos } };
+    }
+
+    case 'adopt': {
+      const list = hamstersOf(r);
+      if (list.length >= MAX_HAMSTERS) return { result: { ok: false, reason: 'max' } };
+      const name = String(extra.name || '').trim().slice(0, 10) || '小倉鼠';
+      const h = { id: 'h' + now.toString(36), name, color: extra.color || 'golden', addedAt: now };
+      r.hamsters = [...list, h];
+      d.love += 3;
+      return { room: r, event: ev('adopt', { hid: h.id, name }), result: { ok: true, hamster: h } };
+    }
+
+    case 'renameHamster': {
+      const list = hamstersOf(r).map((h) => (h.id === extra.hid ? { ...h, name: String(extra.name || h.name).slice(0, 10) } : h));
+      r.hamsters = list;
+      if (list[0]) d.name = list[0].name;
+      return { room: r, result: { ok: true } };
     }
 
     case 'note': {

@@ -1,32 +1,14 @@
-// 3D 場景：兩層樓的倉鼠籠
+// 3D 場景：兩層樓倉鼠窩（沒有鐵絲，看得清楚）。倉鼠動作來自 sim.js，這裡只負責畫出來。
 //   一樓：滾輪、沙浴盆、飼料碗、水瓶、木頭隧道
-//   二樓：木平台＋小木屋＋棉花窩（用木梯斜坡上下樓）
+//   二樓：木平台＋小木屋＋棉花窩（木梯斜坡上下樓）
 import * as THREE from 'three';
 import { Hamster } from './hamster.js';
+import { W, WHEEL, SAND, BOWL, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS, levelY } from './layout.js';
+import { HIDDEN_PLACES } from './sim.js';
 
-const CANCEL = Symbol('cancel');
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = THREE.MathUtils.clamp;
-
-// ---- 籠子配置（墊料表面 y=0）----
-const W = { x: 1.8, z: 1.1, top: 2.7, baseTop: 0.36, baseBottom: -0.3 };
-const WHEEL = { x: -1.12, y: 0.72, z: -0.55, r: 0.6, depth: 0.4 };
-const SAND = { x: -0.2, z: 0.5, r: 0.42 };
-const BOWL = { x: 0.85, z: 0.62, r: 0.17 };
-const DRINK = { x: -1.48, z: 0.6 };
-const PLAT = { x0: 0.15, x1: W.x, z0: -W.z, z1: -0.1, y: 0.95 };
-const RAMP = { x: 1.52, w: 0.38, zTop: PLAT.z1, zBot: 0.95 };
-const HOUSE = { x: 0.62, z: -0.82 };
-const NEST = { x: 1.12, z: -0.56, r: 0.25 };
-const LOG = { x: 0.75, z: -0.72 };
-
-const OBST1 = [
-  { x: SAND.x, z: SAND.z, r: SAND.r + 0.12 },
-  { x: BOWL.x, z: BOWL.z, r: 0.3 },
-  { x: WHEEL.x, z: WHEEL.z, r: 0.72 },
-  { x: LOG.x, z: LOG.z, r: 0.42 },
-];
-const OBST2 = [{ x: HOUSE.x, z: HOUSE.z, r: 0.4 }];
+const ss = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
 /* ---------------- 程式產生的貼圖 ---------------- */
 function canvasTex(w, h, draw, repeat = [1, 1]) {
@@ -82,9 +64,7 @@ function shadowBlobTex() {
   g.fillRect(0, 0, 128, 128);
   return new THREE.CanvasTexture(c);
 }
-
 const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.8, ...extra });
-
 function mesh(geo, mat, x = 0, y = 0, z = 0, { cast = true, receive = true } = {}) {
   const m = new THREE.Mesh(geo, mat);
   m.position.set(x, y, z);
@@ -93,43 +73,52 @@ function mesh(geo, mat, x = 0, y = 0, z = 0, { cast = true, receive = true } = {
   return m;
 }
 
-// 線段穿過障礙物就繞過去
-function route(from, to, obstacles) {
-  const pts = [];
-  let cur = { ...from };
-  for (let iter = 0; iter < 4; iter++) {
-    let hit = null;
-    let bestT = Infinity;
-    let hitP = null;
-    for (const o of obstacles) {
-      if (Math.hypot(cur.x - o.x, cur.z - o.z) < o.r || Math.hypot(to.x - o.x, to.z - o.z) < o.r) continue;
-      const dx = to.x - cur.x;
-      const dz = to.z - cur.z;
-      const L2 = dx * dx + dz * dz || 1;
-      const t = clamp(((o.x - cur.x) * dx + (o.z - cur.z) * dz) / L2, 0, 1);
-      const px = cur.x + dx * t;
-      const pz = cur.z + dz * t;
-      if (Math.hypot(px - o.x, pz - o.z) < o.r && t < bestT) { bestT = t; hit = o; hitP = { x: px, z: pz }; }
+/* ---------------- 食物模型 ---------------- */
+const SEED_TEX = canvasTex(64, 32, (g, w, h) => {
+  g.fillStyle = '#2b2522';
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = '#e9e2d6';
+  for (let x = 4; x < w; x += 12) g.fillRect(x, 0, 3, h);
+});
+function makeFood(kind) {
+  const g = new THREE.Group();
+  if (kind === 'seed') {
+    const s = mesh(new THREE.SphereGeometry(1, 16, 10), std(0xffffff, { map: SEED_TEX, roughness: 0.4 }));
+    s.scale.set(0.024, 0.014, 0.045);
+    s.position.y = 0.014;
+    g.add(s);
+  } else if (kind === 'fish') {
+    const body = mesh(new THREE.SphereGeometry(1, 18, 12), std(0xc9b48f, { roughness: 0.45, metalness: 0.25 }));
+    body.scale.set(0.022, 0.02, 0.075);
+    body.position.y = 0.02;
+    g.add(body);
+    const back = mesh(new THREE.SphereGeometry(1, 14, 10), std(0x8e8a8f, { roughness: 0.4, metalness: 0.35 }));
+    back.scale.set(0.016, 0.012, 0.065);
+    back.position.set(0, 0.032, 0);
+    g.add(back);
+    const tail = mesh(new THREE.ConeGeometry(0.03, 0.05, 4), std(0xb7a07c, { roughness: 0.5 }));
+    tail.rotation.x = Math.PI / 2;
+    tail.scale.set(1, 0.3, 1);
+    tail.position.set(0, 0.02, -0.09);
+    g.add(tail);
+    [-1, 1].forEach((sd) => g.add(mesh(new THREE.SphereGeometry(0.006, 8, 6), std(0x111111), sd * 0.018, 0.028, 0.055, { cast: false })));
+  } else {
+    const cols = [0xb07a45, 0xc98d52, 0x8fae5a, 0xd9a55f, 0x9b6a3c];
+    for (let i = 0; i < 12; i++) {
+      const a = i * 2.39;
+      const r = 0.012 + (i % 4) * 0.014;
+      const p = mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.016, 8), std(cols[i % cols.length], { roughness: 0.9 }), Math.cos(a) * r, 0.01 + (i % 3) * 0.008, Math.sin(a) * r);
+      p.rotation.set(rand(0, 3), rand(0, 3), 0);
+      g.add(p);
     }
-    if (!hit) break;
-    let nx = hitP.x - hit.x;
-    let nz = hitP.z - hit.z;
-    let n = Math.hypot(nx, nz);
-    if (n < 1e-3) { nx = -(to.z - cur.z); nz = to.x - cur.x; n = Math.hypot(nx, nz) || 1; }
-    const wp = {
-      x: clamp(hit.x + (nx / n) * (hit.r + 0.06), -W.x + 0.15, W.x - 0.15),
-      z: clamp(hit.z + (nz / n) * (hit.r + 0.06), -W.z + 0.15, W.z - 0.15),
-    };
-    pts.push(wp);
-    cur = wp;
   }
-  pts.push(to);
-  return pts;
+  return g;
 }
 
 export class World {
-  constructor(canvas) {
+  constructor(canvas, sim) {
     this.canvas = canvas;
+    this.sim = sim;
     const r = (this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true }));
     r.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     r.toneMapping = THREE.ACESFilmicToneMapping;
@@ -139,12 +128,11 @@ export class World {
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.1, 60);
-    this.target = new THREE.Vector3(0, 0.4, 0.1);
-    this.camMode = 'follow';
-    this.camHalfW = 1.05;
+    this.cam = { yaw: 0, pitch: 0.6, dist: null, target: new THREE.Vector3(0, 0.72, 0) };
 
     const s = this.scene;
-    s.add(new THREE.HemisphereLight(0xfffaf2, 0xd9c2a5, 1.25));
+    this.hemi = new THREE.HemisphereLight(0xfffaf2, 0xd9c2a5, 1.25);
+    s.add(this.hemi);
     const sun = (this.sun = new THREE.DirectionalLight(0xfff0dc, 2.2));
     sun.position.set(2.2, 5.5, 3.2);
     sun.castShadow = true;
@@ -154,48 +142,41 @@ export class World {
     sun.shadow.normalBias = 0.02;
     sun.shadow.radius = 3;
     s.add(sun);
-    const fill = new THREE.DirectionalLight(0xdfe8ff, 0.45);
-    fill.position.set(-3, 2.5, 2);
-    s.add(fill);
+    this.fill = new THREE.DirectionalLight(0xdfe8ff, 0.45);
+    this.fill.position.set(-3, 2.5, 2);
+    s.add(this.fill);
+    this.lamp = new THREE.PointLight(0xffc37a, 0, 6, 1.6); // 晚上的小夜燈
+    this.lamp.position.set(1.4, 2.2, 1.2);
+    s.add(this.lamp);
+    this.nightK = 0;
+    this.night = false;
 
     this.buildRoom();
     this.buildBase();
-    this.buildBars();
     this.buildWheel();
     this.buildSandBath();
     this.buildBowl();
     this.buildBottle();
     this.buildUpstairs();
+    this.buildParticles();
 
-    const blobMat = new THREE.MeshBasicMaterial({ map: shadowBlobTex(), transparent: true, depthWrite: false });
-    this.contact = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.55), blobMat);
-    this.contact.rotation.x = -Math.PI / 2;
-    s.add(this.contact);
-
-    this.buildSandParticles();
-
-    this.ham = new Hamster();
-    this.ham.root.position.set(-0.4, 0, -0.05);
-    s.add(this.ham.root);
+    this.blobMat = new THREE.MeshBasicMaterial({ map: shadowBlobTex(), transparent: true, depthWrite: false });
+    this.rigs = {}; // hid → { ham, contact }
+    this.infos = {}; // hid → { name, color }
+    this.foodMeshes = {};
+    this.marker = new THREE.Mesh(new THREE.RingGeometry(0.06, 0.085, 32), new THREE.MeshBasicMaterial({ color: 0x5fcf8e, transparent: true, opacity: 0.85, depthTest: false }));
+    this.marker.rotation.x = -Math.PI / 2;
+    this.marker.renderOrder = 10;
+    this.marker.visible = false;
+    s.add(this.marker);
 
     this.raycaster = new THREE.Raycaster();
-    this.pointer = new THREE.Vector2();
+    this.ndc = new THREE.Vector2();
     this.clock = new THREE.Clock();
-    this.lookPoint = new THREE.Vector3(0, 1.4, 5);
     this._v = new THREE.Vector3();
     this._m = new THREE.Matrix4();
-
-    // 行為狀態
-    this.token = 0;
-    this.mode = 'idle';
-    this.level = 1;
-    this.inWheel = false;
-    this.inSand = false;
-    this.rampTo = 0; // 正在梯子上時＝目標樓層
+    this._c = new THREE.Color();
     this.wheelVel = 0;
-    this.nextAuto = performance.now() + 1200;
-    this.lastInteraction = performance.now();
-    this.cool = { bath: 0, drink: 0 };
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -208,7 +189,8 @@ export class World {
     const desk = mesh(new THREE.PlaneGeometry(14, 10), std(0xffffff, { map: woodTex('#d8b48a', 'rgba(120,75,35,', [3, 3]), roughness: 0.6 }), 0, W.baseBottom - 0.02, 0, { cast: false });
     desk.rotation.x = -Math.PI / 2;
     s.add(desk);
-    s.add(mesh(new THREE.PlaneGeometry(16, 8), std(0xf4e6da, { roughness: 1 }), 0, 3.5, -2.6, { cast: false }));
+    this.wall = mesh(new THREE.PlaneGeometry(16, 8), std(0xf4e6da, { roughness: 1 }), 0, 3.5, -2.6, { cast: false });
+    s.add(this.wall);
   }
 
   buildBase() {
@@ -222,14 +204,13 @@ export class World {
     s.add(mesh(new THREE.BoxGeometry(X * 2 + 2 * t, h, t), plastic, 0, B + h / 2, -Z - t / 2));
     s.add(mesh(new THREE.BoxGeometry(t, h, Z * 2 + 2 * t), plastic, -X - t / 2, B + h / 2, 0));
     s.add(mesh(new THREE.BoxGeometry(t, h, Z * 2 + 2 * t), plastic, X + t / 2, B + h / 2, 0));
-    // 前面透明壓克力（看得到厚厚的墊料）
     const acrylic = new THREE.MeshStandardMaterial({ color: 0xf2fbff, roughness: 0.05, transparent: true, opacity: 0.16, depthWrite: false });
     s.add(mesh(new THREE.BoxGeometry(X * 2 + 2 * t, h, 0.02), acrylic, 0, B + h / 2, Z + 0.01, { cast: false, receive: false }));
-    // 上緣卡扣條
-    [-Z - t / 2, Z + 0.01].forEach((z) => s.add(mesh(new THREE.BoxGeometry(X * 2 + 2 * t, 0.05, 0.07), accent, 0, T, z)));
+    s.add(mesh(new THREE.BoxGeometry(X * 2 + 2 * t, 0.05, 0.07), accent, 0, T, -Z - t / 2));
+    s.add(mesh(new THREE.BoxGeometry(X * 2 + 2 * t, 0.03, 0.03), accent, 0, T, Z + 0.01));
     [-1, 1].forEach((sd) => s.add(mesh(new THREE.BoxGeometry(0.07, 0.05, Z * 2 + 0.1), accent, sd * (X + t / 2), T, 0)));
 
-    // 紙棉墊料：側面＋起伏的表面＋碎屑
+    // 紙棉墊料
     const beddingSide = std(0xffffff, { map: speckleTex('#efe4cf', ['#e3d3b4', '#f8f1e4', '#d9c7a4', '#fffaf0'], 6000, [4, 1]), roughness: 1 });
     s.add(mesh(new THREE.BoxGeometry(X * 2, -B - 0.01, Z * 2), beddingSide, 0, (B - 0.01) / 2, 0, { cast: false }));
     const top = new THREE.PlaneGeometry(X * 2, Z * 2, 90, 56);
@@ -242,12 +223,13 @@ export class World {
       const z = p.getZ(i);
       const edge = Math.abs(x) > X - 0.15 || Math.abs(z) > Z - 0.15 ? 0.025 : 0;
       p.setY(i, Math.sin(x * 5.1 + z * 2.3) * 0.012 + Math.sin(x * 11 - z * 9) * 0.006 + Math.random() * 0.012 + edge);
-      c.setHSL(0.1, 0.35 + Math.random() * 0.15, 0.85 + Math.random() * 0.08);
+      c.setHSL(0.1, 0.4 + Math.random() * 0.15, 0.86 + Math.random() * 0.07);
       cols.set([c.r, c.g, c.b], i * 3);
     }
     top.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     top.computeVertexNormals();
-    s.add(mesh(top, std(0xffffff, { vertexColors: true, roughness: 1 }), 0, 0, 0, { cast: false }));
+    this.floor = mesh(top, std(0xffffff, { vertexColors: true, roughness: 1 }), 0, 0, 0, { cast: false });
+    s.add(this.floor);
     const bits = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.03, 0), std(0xffffff, { roughness: 1 }), 700);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -260,52 +242,6 @@ export class World {
     }
     bits.receiveShadow = true;
     s.add(bits);
-  }
-
-  buildBars() {
-    const s = this.scene;
-    const { x: X, z: Z, top: TOP, baseTop: T } = W;
-    const metal = std(0xf6f6f6, { roughness: 0.25, metalness: 0.35 });
-    const metalSee = std(0xf6f6f6, { roughness: 0.25, metalness: 0.35, transparent: true, opacity: 0.28, depthWrite: false });
-    const len = TOP - T;
-    const geo = new THREE.CylinderGeometry(0.008, 0.008, len, 5);
-    const back = [];
-    const front = [];
-    const gap = 0.09;
-    for (let x = -X; x <= X + 1e-3; x += gap) { back.push([x, -Z - 0.02]); front.push([x, Z + 0.02]); }
-    for (let z = -Z + gap; z < Z - 1e-3; z += gap) { back.push([-X - 0.02, z]); back.push([X + 0.02, z]); }
-    const inst = (list, mat, cast) => {
-      const im = new THREE.InstancedMesh(geo, mat, list.length);
-      const m = new THREE.Matrix4();
-      list.forEach(([x, z], i) => im.setMatrixAt(i, m.makeTranslation(x, T + len / 2, z)));
-      im.castShadow = cast;
-      s.add(im);
-    };
-    inst(back, metal, true);
-    inst(front, metalSee, false);
-    this.frontBarsMat = metalSee;
-    // 屋頂鐵絲（半透明，不擋視線）
-    const roofGeo = new THREE.CylinderGeometry(0.008, 0.008, Z * 2 + 0.04, 5);
-    const roof = new THREE.InstancedMesh(roofGeo, metalSee, Math.floor((X * 2) / gap) + 1);
-    const rot = new THREE.Matrix4().makeRotationX(Math.PI / 2);
-    for (let i = 0; i < roof.count; i++) roof.setMatrixAt(i, rot.clone().setPosition(-X + i * gap, TOP, 0));
-    s.add(roof);
-    // 框架
-    const frame = std(0xffffff, { roughness: 0.3, metalness: 0.4 });
-    const rail = (w, d, x, y, z, see) => s.add(mesh(new THREE.BoxGeometry(w, 0.03, d), see ? metalSee : frame, x, y, z, { cast: !see }));
-    [T + 0.05, 1.5, TOP].forEach((y) => {
-      rail(X * 2 + 0.06, 0.03, 0, y, -Z - 0.02);
-      rail(0.03, Z * 2 + 0.06, -X - 0.02, y, 0);
-      rail(0.03, Z * 2 + 0.06, X + 0.02, y, 0);
-      rail(X * 2 + 0.06, 0.03, 0, y, Z + 0.02, y !== TOP);
-    });
-    [[-X, -Z], [X, -Z], [-X, Z], [X, Z]].forEach(([x, z]) => {
-      s.add(mesh(new THREE.BoxGeometry(0.035, len, 0.035), z > 0 ? metalSee : frame, x + Math.sign(x) * 0.02, T + len / 2, z + Math.sign(z) * 0.02, { cast: z < 0 }));
-    });
-    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.015, 8, 32, Math.PI), frame);
-    handle.position.set(0, TOP, 0);
-    handle.rotation.y = Math.PI / 2;
-    s.add(handle);
   }
 
   buildWheel() {
@@ -327,7 +263,6 @@ export class World {
     const back = mesh(new THREE.CircleGeometry(r, 72), plastic);
     back.position.z = -depth / 2;
     rotor.add(back);
-    // 背板上的造型孔（看得出在轉）
     const holeMat = std(0x6fb3a2, { roughness: 0.5 });
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
@@ -363,7 +298,6 @@ export class World {
     rim.rotation.x = Math.PI / 2;
     rim.position.y = 0.15;
     g.add(rim);
-    // 沙子（中間微微隆起）
     const sandPts = [];
     for (let i = 12; i >= 0; i--) {
       const k = i / 12;
@@ -375,49 +309,38 @@ export class World {
   }
 
   buildBowl() {
-    this.bowl = new THREE.Group();
+    const g = new THREE.Group();
     const R = BOWL.r;
     const pts = [
       new THREE.Vector2(0.001, 0.03), new THREE.Vector2(R - 0.04, 0.03), new THREE.Vector2(R - 0.02, 0.1),
       new THREE.Vector2(R, 0.11), new THREE.Vector2(R + 0.02, 0.09), new THREE.Vector2(R - 0.01, 0.0), new THREE.Vector2(0.001, 0.0),
     ];
-    this.bowl.add(mesh(new THREE.LatheGeometry(pts, 48), std(0xffc9a8, { roughness: 0.2, side: THREE.DoubleSide })));
-    this.seeds = [];
-    const seedMat = std(0x4b4038, { roughness: 0.5 });
-    const pelletMat = std(0xc89b62, { roughness: 0.9 });
-    const seedGeo = new THREE.SphereGeometry(1, 10, 8);
-    for (let i = 0; i < 18; i++) {
-      const pellet = i % 3 === 0;
-      const sd = new THREE.Mesh(seedGeo, pellet ? pelletMat : seedMat);
-      if (pellet) sd.scale.set(0.022, 0.018, 0.022);
-      else sd.scale.set(0.016, 0.01, 0.03);
-      const a = i * 2.4;
-      const rr = 0.02 + (i % 5) * 0.025;
-      sd.position.set(Math.cos(a) * rr, 0.045 + (i % 3) * 0.01, Math.sin(a) * rr);
-      sd.rotation.y = a;
-      sd.visible = false;
-      sd.castShadow = true;
-      this.bowl.add(sd);
-      this.seeds.push(sd);
-    }
-    this.bowl.position.set(BOWL.x, 0.005, BOWL.z);
-    this.scene.add(this.bowl);
+    g.add(mesh(new THREE.LatheGeometry(pts, 48), std(0xffc9a8, { roughness: 0.2, side: THREE.DoubleSide })));
+    g.position.set(BOWL.x, 0.005, BOWL.z);
+    this.scene.add(g);
   }
 
   buildBottle() {
+    // 沒有鐵絲了，水瓶掛在木頭架子上
     const g = new THREE.Group();
+    const woodDark = std(0xffffff, { map: woodTex('#b9844e', 'rgba(90,50,20,'), roughness: 0.8 });
+    g.add(mesh(new THREE.BoxGeometry(0.22, 0.03, 0.22), woodDark, 0.02, 0.015, 0));
+    g.add(mesh(new THREE.BoxGeometry(0.05, 1.05, 0.05), woodDark, -0.08, 0.53, 0));
     const glass = new THREE.MeshStandardMaterial({ color: 0xe6f6ff, roughness: 0.05, transparent: true, opacity: 0.35, depthWrite: false });
-    g.add(mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.55, 24), glass, 0, 0, 0, { cast: false }));
-    g.add(mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.38, 24), new THREE.MeshStandardMaterial({ color: 0x9fd6ff, transparent: true, opacity: 0.6, roughness: 0.1 }), 0, -0.08, 0, { cast: false }));
-    g.add(mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.04, 24), std(0x7fb6e8), 0, 0.29, 0));
-    g.add(mesh(new THREE.CylinderGeometry(0.065, 0.09, 0.08, 20), std(0x7fb6e8), 0, -0.31, 0));
+    const b = new THREE.Group();
+    b.add(mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.55, 24), glass, 0, 0, 0, { cast: false }));
+    b.add(mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.38, 24), new THREE.MeshStandardMaterial({ color: 0x9fd6ff, transparent: true, opacity: 0.6, roughness: 0.1 }), 0, -0.08, 0, { cast: false }));
+    b.add(mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.04, 24), std(0x7fb6e8), 0, 0.29, 0));
+    b.add(mesh(new THREE.CylinderGeometry(0.065, 0.09, 0.08, 20), std(0x7fb6e8), 0, -0.31, 0));
     const spout = mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.3, 10), std(0xdadada, { metalness: 0.8, roughness: 0.25 }), 0.07, -0.44, 0);
     spout.rotation.z = 0.75;
-    g.add(spout);
+    b.add(spout);
     const clip = mesh(new THREE.TorusGeometry(0.11, 0.008, 6, 24), std(0xdadada, { metalness: 0.7, roughness: 0.3 }), 0, 0.1, 0);
     clip.rotation.x = Math.PI / 2;
-    g.add(clip);
-    g.position.set(-W.x + 0.13, 0.72, DRINK.z);
+    b.add(clip);
+    b.position.set(0.04, 0.78, 0);
+    g.add(b);
+    g.position.set(-W.x + 0.17, 0, DRINK.z);
     this.scene.add(g);
   }
 
@@ -426,10 +349,10 @@ export class World {
     const wood = std(0xffffff, { map: woodTex('#d6a46c', 'rgba(115,65,25,', [2, 1]), roughness: 0.75 });
     const woodDark = std(0xffffff, { map: woodTex('#b9844e', 'rgba(90,50,20,'), roughness: 0.8 });
     const { x0, x1, z0, z1, y } = PLAT;
-    // 二樓平台＋支柱
-    s.add(mesh(new THREE.BoxGeometry(x1 - x0, 0.06, z1 - z0), wood, (x0 + x1) / 2, y - 0.03, (z0 + z1) / 2));
+    this.platform = mesh(new THREE.BoxGeometry(x1 - x0, 0.06, z1 - z0), wood, (x0 + x1) / 2, y - 0.03, (z0 + z1) / 2);
+    s.add(this.platform);
     s.add(mesh(new THREE.CylinderGeometry(0.03, 0.03, y, 12), woodDark, x0 + 0.05, y / 2, z1 - 0.05));
-    // 欄杆（梯子入口留空）
+    s.add(mesh(new THREE.CylinderGeometry(0.03, 0.03, y, 12), woodDark, x0 + 0.05, y / 2, z0 + 0.05));
     const postGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8);
     const railEnd = RAMP.x - RAMP.w / 2 - 0.02;
     for (let x = x0 + 0.03; x < railEnd; x += 0.13) s.add(mesh(postGeo, woodDark, x, y + 0.08, z1 - 0.02));
@@ -450,15 +373,15 @@ export class World {
 
     // 小木屋
     const house = new THREE.Group();
-    const hw = 0.62;
+    const hw = HOUSE.w;
     const hh = 0.42;
-    const hd = 0.46;
+    const hd = HOUSE.d;
     house.add(mesh(new THREE.BoxGeometry(hw, hh, 0.03), wood, 0, hh / 2, -hd / 2 + 0.015));
     [-1, 1].forEach((sd) => house.add(mesh(new THREE.BoxGeometry(0.03, hh, hd), wood, sd * (hw / 2 - 0.015), hh / 2, 0)));
     const shape = new THREE.Shape();
     shape.moveTo(-hw / 2, 0); shape.lineTo(hw / 2, 0); shape.lineTo(hw / 2, hh); shape.lineTo(-hw / 2, hh); shape.lineTo(-hw / 2, 0);
     const hole = new THREE.Path();
-    hole.moveTo(-0.13, 0); hole.lineTo(0.13, 0); hole.lineTo(0.13, 0.14); hole.absarc(0, 0.14, 0.13, 0, Math.PI, false); hole.lineTo(-0.13, 0);
+    hole.moveTo(-0.14, 0); hole.lineTo(0.14, 0); hole.lineTo(0.14, 0.15); hole.absarc(0, 0.15, 0.14, 0, Math.PI, false); hole.lineTo(-0.14, 0);
     shape.holes.push(hole);
     house.add(mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.03, bevelEnabled: false }), wood, 0, 0, hd / 2 - 0.03));
     house.add(mesh(new THREE.BoxGeometry(hw - 0.06, 0.02, hd - 0.06), std(0x6b4a33), 0, 0.01, 0, { cast: false }));
@@ -476,18 +399,18 @@ export class World {
 
     // 棉花窩＋乾草
     const nest = new THREE.Group();
-    const puff = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 10), std(0xffffff, { roughness: 1 }), 46);
+    const puff = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 10), std(0xffffff, { roughness: 1 }), 50);
     const m = new THREE.Matrix4();
-    for (let i = 0; i < 46; i++) {
-      const a = (i / 46) * Math.PI * 2 + rand(-0.1, 0.1);
-      const rr = rand(NEST.r - 0.05, NEST.r + 0.03);
+    for (let i = 0; i < 50; i++) {
+      const a = (i / 50) * Math.PI * 2 + rand(-0.1, 0.1);
+      const rr = rand(NEST.r - 0.03, NEST.r + 0.05);
       const sz = rand(0.05, 0.085);
       m.compose(new THREE.Vector3(Math.cos(a) * rr, rand(0.03, 0.07), Math.sin(a) * rr), new THREE.Quaternion(), new THREE.Vector3(sz, sz * 0.75, sz));
       puff.setMatrixAt(i, m);
     }
     puff.castShadow = puff.receiveShadow = true;
     nest.add(puff);
-    nest.add(mesh(new THREE.CylinderGeometry(NEST.r, NEST.r, 0.03, 32), std(0xfff6ef, { roughness: 1 }), 0, 0.015, 0));
+    nest.add(mesh(new THREE.CylinderGeometry(NEST.r + 0.03, NEST.r + 0.03, 0.03, 32), std(0xfff6ef, { roughness: 1 }), 0, 0.015, 0));
     const hay = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.004, 0.004, 0.16, 4), std(0xe5c66f, { roughness: 0.9 }), 60);
     for (let i = 0; i < 60; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -499,373 +422,308 @@ export class World {
     nest.position.set(NEST.x, y, NEST.z);
     s.add(nest);
 
-    // 一樓：二樓下面的木頭隧道
+    // 一樓：二樓下面的木頭隧道（倉鼠會鑽進去）
     const log = new THREE.Group();
-    const bark = std(0xffffff, { map: woodTex('#8a5a35', 'rgba(50,25,10,', [3, 1]), roughness: 0.95, side: THREE.DoubleSide });
-    const outer = mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.6, 24, 1, true), bark);
+    const bark = std(0xffffff, { map: woodTex('#8a5a35', 'rgba(50,25,10,', [3, 1]), roughness: 0.95 });
+    const inner = std(0xffffff, { map: woodTex('#c79a68', 'rgba(90,55,25,', [3, 1]), roughness: 0.95, side: THREE.BackSide });
+    const outer = mesh(new THREE.CylinderGeometry(LOG.r, LOG.r, LOG.len, 28, 1, true), bark);
     outer.rotation.z = Math.PI / 2;
     log.add(outer);
+    const innerM = mesh(new THREE.CylinderGeometry(LOG.inner, LOG.inner, LOG.len, 28, 1, true), inner, 0, 0, 0, { cast: false });
+    innerM.rotation.z = Math.PI / 2;
+    log.add(innerM);
     [-1, 1].forEach((sd) => {
-      const ring = mesh(new THREE.RingGeometry(0.13, 0.17, 24), std(0xd9b07a, { side: THREE.DoubleSide }), sd * 0.3, 0, 0);
+      const ring = mesh(new THREE.RingGeometry(LOG.inner, LOG.r, 28), std(0xd9b07a, { side: THREE.DoubleSide }), sd * LOG.len / 2, 0, 0);
       ring.rotation.y = Math.PI / 2;
       log.add(ring);
     });
-    log.position.set(LOG.x, 0.15, LOG.z);
+    log.position.set(LOG.x, LOG.r, LOG.z);
     s.add(log);
   }
 
-  buildSandParticles() {
-    this.sandN = 60;
-    this.sandP = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 4), std(0xe2c99a, { roughness: 1 }), this.sandN);
-    this.sandP.frustumCulled = false;
-    this.particles = Array.from({ length: this.sandN }, () => ({ p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0, s: 0.01 }));
-    this.scene.add(this.sandP);
-    this.emitSand = 0;
+  buildParticles() {
+    this.pN = 90;
+    this.pMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 4), std(0xffffff, { roughness: 1 }), this.pN);
+    this.pMesh.frustumCulled = false;
+    this.parts = Array.from({ length: this.pN }, () => ({ p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0, s: 0.01, floor: 0 }));
+    const c = new THREE.Color(0xffffff);
+    for (let i = 0; i < this.pN; i++) this.pMesh.setColorAt(i, c);
+    this.scene.add(this.pMesh);
+  }
+  emit(pos, color, n, floor, back) {
+    for (let i = 0; i < n; i++) {
+      const idx = this.parts.findIndex((x) => x.life <= 0);
+      if (idx < 0) return;
+      const pt = this.parts[idx];
+      pt.p.set(pos.x + rand(-0.08, 0.08), pos.y + 0.05, pos.z + rand(-0.08, 0.08));
+      pt.v.set(rand(-0.6, 0.6), rand(0.6, 1.2), rand(-0.6, 0.6));
+      if (back) pt.v.addScaledVector(back, 0.9);
+      pt.life = rand(0.45, 0.85);
+      pt.s = rand(0.008, 0.016);
+      pt.floor = floor;
+      this.pMesh.setColorAt(idx, this._c.set(color));
+      this.pMesh.instanceColor.needsUpdate = true;
+    }
   }
 
-  /* ================= 相機 ================= */
+  /* ================= 倉鼠與食物 ================= */
+  setHamsters(list) {
+    for (const h of list) this.infos[h.id] = h;
+  }
+  rigFor(id) {
+    if (!this.rigs[id]) {
+      const ham = new Hamster(this.infos[id]?.color || 'golden');
+      this.scene.add(ham.root);
+      const contact = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.55), this.blobMat);
+      contact.rotation.x = -Math.PI / 2;
+      this.scene.add(contact);
+      this.rigs[id] = { ham, contact, pose: null };
+    }
+    return this.rigs[id];
+  }
+
+  updateFoods(now) {
+    const seen = new Set();
+    const sim = this.sim;
+    for (const f of sim.foods()) {
+      const end = f.eatenAt ?? f.goneAt ?? Infinity;
+      if (now < f.at - 200 || now > end + 400) continue;
+      seen.add(f.id);
+      let m = this.foodMeshes[f.id];
+      if (!m) {
+        m = makeFood(f.kind);
+        m.rotation.y = (f.at % 628) / 100;
+        this.scene.add(m);
+        this.foodMeshes[f.id] = m;
+      }
+      const fall = clamp((now - f.at) / 350, 0, 1);
+      m.position.set(f.x, f.y + (1 - fall * fall) * 0.5, f.z);
+      m.scale.setScalar(1);
+      if (now > end) m.scale.setScalar(Math.max(0.01, 1 - (now - end) / 400));
+      else if (f.eatT0 != null && now >= f.eatT0) {
+        const k = clamp((now - f.eatT0) / (f.eatenAt - f.eatT0), 0, 1);
+        const rig = this.rigs[f.claimedBy];
+        if (f.kind === 'kibble' || !rig) m.scale.setScalar(1 - k * 0.85);
+        else {
+          // 捧在手上吃
+          rig.ham.holdPoint.getWorldPosition(this._v);
+          m.position.lerp(this._v, Math.min(1, k * 6));
+          m.rotation.x = -0.9;
+          m.scale.setScalar(1.1 - k * 0.7);
+        }
+      }
+    }
+    for (const id in this.foodMeshes) {
+      if (!seen.has(id)) {
+        this.scene.remove(this.foodMeshes[id]);
+        delete this.foodMeshes[id];
+      }
+    }
+  }
+
+  /* ================= 相機（縮放／旋轉／平移） ================= */
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    if (this.cam.dist == null) this.cam.dist = this.fitDist();
   }
-  toggleCamera() {
-    this.camMode = this.camMode === 'follow' ? 'overview' : 'follow';
-    return this.camMode;
-  }
-  updateCamera(dt) {
-    const p = this.ham.root.position;
-    let tx, ty, tz, halfW;
-    if (this.camMode === 'follow') {
-      tx = clamp(p.x * 0.85, -1.1, 1.1);
-      ty = 0.3 + p.y * 0.9;
-      tz = clamp(p.z * 0.35, -0.3, 0.3);
-      halfW = 1.05;
-    } else {
-      tx = 0; ty = 0.85; tz = 0; halfW = 2.1;
-    }
-    const k = 1 - Math.exp(-2.2 * dt);
-    this.target.x += (tx - this.target.x) * k;
-    this.target.y += (ty - this.target.y) * k;
-    this.target.z += (tz - this.target.z) * k;
-    this.camHalfW += (halfW - this.camHalfW) * k;
+  fitDist() {
     const tanH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    const dist = Math.min(11, Math.max(3.6, this.camHalfW / (tanH * this.camera.aspect)));
-    const dir = this._v.set(0, 0.5, 0.86).normalize();
-    // 跟隨模式時把前面的鐵絲淡掉，才看得清楚倉鼠
-    this.frontBarsMat.opacity += ((this.camMode === 'follow' ? 0.06 : 0.22) - this.frontBarsMat.opacity) * k;
-    this.camera.position.copy(this.target).addScaledVector(dir, dist);
-    this.camera.lookAt(this.target);
+    return clamp(1.98 / (tanH * Math.min(1.6, this.camera.aspect)), 3.5, 11);
+  }
+  resetView() {
+    Object.assign(this.cam, { yaw: 0, pitch: 0.6, dist: this.fitDist() });
+    this.cam.target.set(0, 0.72, 0);
+  }
+  orbit(dx, dy) {
+    this.cam.yaw = clamp(this.cam.yaw - dx * 0.006, -1.2, 1.2);
+    this.cam.pitch = clamp(this.cam.pitch + dy * 0.005, 0.12, 1.3);
+  }
+  zoom(factor) {
+    this.cam.dist = clamp(this.cam.dist * factor, 1.1, 12);
+  }
+  pan(dx, dy) {
+    const k = this.cam.dist / (this.canvas.clientHeight || 800) * 0.9;
+    const right = this._v.setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const t = this.cam.target;
+    t.addScaledVector(right, -dx * k);
+    const fwd = new THREE.Vector3(-Math.sin(this.cam.yaw), 0, -Math.cos(this.cam.yaw));
+    t.addScaledVector(fwd, dy * k);
+    t.x = clamp(t.x, -1.7, 1.7);
+    t.z = clamp(t.z, -1.0, 1.0);
+  }
+  updateCamera() {
+    const { yaw, pitch, dist, target } = this.cam;
+    // 拉近時把視線高度慢慢移到二樓附近也看得到
+    this.camera.position.set(
+      target.x + Math.sin(yaw) * Math.cos(pitch) * dist,
+      target.y + Math.sin(pitch) * dist,
+      target.z + Math.cos(yaw) * Math.cos(pitch) * dist,
+    );
+    this.camera.lookAt(target);
   }
 
-  /* ================= 點擊／螢幕座標 ================= */
+  /* ================= 點擊與放食物 ================= */
+  setNdc(clientX, clientY) {
+    const r = this.canvas.getBoundingClientRect();
+    this.ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+  }
   toScreen(v) {
     const p = v.clone().project(this.camera);
     const r = this.canvas.getBoundingClientRect();
-    return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
+    return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height, inView: Math.abs(p.x) < 1 && Math.abs(p.y) < 1 && p.z < 1 };
   }
-  hitHamster(clientX, clientY) {
-    const r = this.canvas.getBoundingClientRect();
-    this.pointer.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    if (this.raycaster.intersectObject(this.ham.root, true).length) return true;
-    const c = this.toScreen(this.ham.rollG.localToWorld(new THREE.Vector3(0, 0.1, 0.05)));
-    return Math.hypot(c.x - clientX, c.y - clientY) < 60;
+  pickHamster(clientX, clientY) {
+    this.setNdc(clientX, clientY);
+    let best = null;
+    let bestD = Infinity;
+    for (const id in this.rigs) {
+      const rig = this.rigs[id];
+      if (!rig.pose || HIDDEN_PLACES.has(rig.pose.place)) continue;
+      const hit = this.raycaster.intersectObject(rig.ham.root, true)[0];
+      if (hit && hit.distance < bestD) { bestD = hit.distance; best = id; }
+    }
+    if (best) return best;
+    for (const id in this.rigs) {
+      const rig = this.rigs[id];
+      if (!rig.pose || HIDDEN_PLACES.has(rig.pose.place)) continue;
+      const c = this.toScreen(rig.ham.rollG.localToWorld(this._v.set(0, 0.1, 0.05)));
+      const d = Math.hypot(c.x - clientX, c.y - clientY);
+      if (d < 50 && d < bestD) { bestD = d; best = id; }
+    }
+    return best;
   }
-  headScreenPos() {
-    return this.toScreen(this.ham.head.localToWorld(new THREE.Vector3(0, 0.42, 0)));
+  headScreenPos(id) {
+    const rig = this.rigs[id];
+    if (!rig) return null;
+    return this.toScreen(rig.ham.head.localToWorld(this._v.set(0, 0.42, 0)));
   }
-  setLook(clientX, clientY) {
-    const r = this.canvas.getBoundingClientRect();
-    const x = ((clientX - r.left) / r.width) * 2 - 1;
-    const y = -((clientY - r.top) / r.height) * 2 + 1;
-    this.lookPoint.set(this.camera.position.x + x * 2.5, this.camera.position.y * 0.5 + y, this.camera.position.z);
+  hamsterPlace(id) {
+    return this.rigs[id]?.pose?.place;
+  }
+  visibleHamsters() {
+    return Object.keys(this.rigs).filter((id) => {
+      const rig = this.rigs[id];
+      if (!rig.pose || HIDDEN_PLACES.has(rig.pose.place)) return false;
+      return this.toScreen(rig.ham.root.position.clone().setY(rig.ham.root.position.y + 0.2)).inView;
+    });
   }
 
-  /* ================= 行為 ================= */
-  get sleeping() { return this.ham.sleeping; }
-  get userBusy() { return this.mode === 'user'; }
-  touch() { this.lastInteraction = performance.now(); }
-
-  routine(kind, fn) {
-    const tok = ++this.token;
-    this.ham.cancel();
-    this.mode = kind;
-    this.emitSand = 0;
-    this.seeds.forEach((sd) => (sd.visible = false));
-    const step = async (p) => {
-      await p;
-      if (tok !== this.token) throw CANCEL;
+  // 手指放開的位置 → 食物要落在哪裡（自動避開滾輪、沙盆、隧道、梯子）
+  dropPoint(clientX, clientY) {
+    this.setNdc(clientX, clientY);
+    const ray = this.raycaster.ray;
+    const hitY = (y) => {
+      if (Math.abs(ray.direction.y) < 1e-4) return null;
+      const t = (y - ray.origin.y) / ray.direction.y;
+      return t > 0 ? ray.origin.clone().addScaledVector(ray.direction, t) : null;
     };
-    const run = async () => {
-      try {
-        const h = this.ham;
-        // 先收拾上一個動作留下的狀態
-        if (h.sleeping) {
-          h.sleeping = false;
-          await step(h.wait(0.6));
-          await step(h.groomFor(0.9));
-        }
-        if (this.rampTo) await this.finishRamp(step);
-        if (this.inWheel) await this.exitWheel(step);
-        if (this.inSand) await this.exitSand(step);
-        await fn(step);
-      } catch (e) {
-        if (e !== CANCEL) console.error(e);
-      } finally {
-        if (tok === this.token) {
-          this.mode = 'idle';
-          this.ham.look = this.lookPoint;
-          this.emitSand = 0;
-          this.nextAuto = performance.now() + rand(800, 2800);
+    let lvl = 0;
+    let p = hitY(PLAT.y);
+    if (p && p.x > PLAT.x0 && p.x < PLAT.x1 && p.z > PLAT.z0 && p.z < PLAT.z1) lvl = 2;
+    else {
+      p = hitY(0);
+      if (p && Math.abs(p.x) < W.x && Math.abs(p.z) < W.z) lvl = 1;
+    }
+    if (!lvl) return null;
+    let x = p.x;
+    let z = p.z;
+    let y = levelY(lvl) + 0.012;
+    if (lvl === 1 && Math.hypot(x - BOWL.x, z - BOWL.z) < BOWL.r + 0.08) {
+      // 放進飼料碗
+      const a = Math.random() * Math.PI * 2;
+      const rr = Math.random() * 0.05;
+      return { x: BOWL.x + Math.cos(a) * rr, y: 0.04, z: BOWL.z + Math.sin(a) * rr, level: 1, bowl: true };
+    }
+    const b = BOUNDS[lvl];
+    for (let iter = 0; iter < 3; iter++) {
+      for (const o of lvl === 1 ? OB1 : OB2) {
+        if (o.id === 'bowl') continue;
+        const d = Math.hypot(x - o.x, z - o.z);
+        if (d < o.r) {
+          const k = (o.r + 0.02) / (d || 1);
+          x = o.x + (x - o.x) * k;
+          z = o.z + (z - o.z) * k;
         }
       }
-    };
-    return run();
-  }
-
-  // ---- 移動與樓層 ----
-  async walk(step, x, z, speed = 0.9) {
-    const h = this.ham;
-    const pts = route({ x: h.root.position.x, z: h.root.position.z }, { x, z }, this.level === 1 ? OBST1 : OBST2);
-    for (const p of pts) await step(h.moveTo(p.x, p.z, speed));
-  }
-  async goLevel(step, lvl) {
-    if (this.level === lvl) return;
-    const h = this.ham;
-    if (lvl === 2) {
-      await this.walk(step, RAMP.x, RAMP.zBot + 0.05);
-      await step(h.face(Math.PI));
-      this.rampTo = 2;
-      await step(h.climbTo(RAMP.x, PLAT.y, RAMP.zTop));
-      this.rampTo = 0;
-      this.level = 2;
-      await step(h.moveTo(RAMP.x, RAMP.zTop - 0.2, 0.6));
-    } else {
-      await this.walk(step, RAMP.x, RAMP.zTop - 0.2);
-      await step(h.moveTo(RAMP.x, RAMP.zTop - 0.02, 0.5));
-      await step(h.face(0));
-      this.rampTo = 1;
-      await step(h.climbTo(RAMP.x, 0, RAMP.zBot + 0.05, 0.75));
-      this.rampTo = 0;
-      this.level = 1;
-      await step(h.moveTo(RAMP.x - 0.3, RAMP.zBot - 0.05, 0.7));
+      x = clamp(x, b.x0, b.x1);
+      z = clamp(z, b.z0, b.z1);
+      if (lvl === 1 && x > RAMP.x - 0.26 && z > -0.2) x = RAMP.x - 0.27;
     }
+    return { x, y, z, level: lvl };
   }
-  async finishRamp(step) {
-    const lvl = this.rampTo;
-    if (lvl === 2) await step(this.ham.climbTo(RAMP.x, PLAT.y, RAMP.zTop));
-    else await step(this.ham.climbTo(RAMP.x, 0, RAMP.zBot + 0.05, 0.75));
-    this.level = lvl;
-    this.rampTo = 0;
-  }
-  async walkTo(step, lvl, x, z, speed) {
-    await this.goLevel(step, lvl);
-    await this.walk(step, x, z, speed);
-  }
-  randomSpot(lvl) {
-    for (let i = 0; i < 40; i++) {
-      if (lvl === 2) {
-        const x = rand(PLAT.x0 + 0.25, RAMP.x - 0.25);
-        const z = rand(-0.48, PLAT.z1 - 0.15);
-        if (Math.hypot(x - HOUSE.x, z - HOUSE.z) > 0.4) return { x, z };
-      } else {
-        const under = Math.random() < 0.2;
-        const x = under ? rand(0.3, 1.2) : rand(-1.6, 1.15);
-        const z = under ? rand(-0.4, -0.2) : rand(-0.12, 0.95);
-        if (OBST1.every((o) => Math.hypot(x - o.x, z - o.z) > o.r + 0.02)) return { x, z };
-      }
-    }
-    return lvl === 2 ? { x: 0.9, z: -0.3 } : { x: 0.2, z: 0.1 };
+  showMarker(pt) {
+    this.marker.visible = !!pt;
+    if (pt) this.marker.position.set(pt.x, pt.y + 0.01, pt.z);
   }
 
-  // ---- 各種行為 ----
-  async wander(step, lvl = this.level) {
-    const h = this.ham;
-    const n = 1 + Math.floor(Math.random() * 3);
-    const slow = h.mood === 'sad' || h.mood === 'hungry';
-    for (let i = 0; i < n; i++) {
-      const p = this.randomSpot(lvl);
-      await this.walkTo(step, lvl, p.x, p.z, slow ? 0.35 : rand(0.55, 0.95));
-      const r = Math.random();
-      if (r < 0.45) await step(h.sniff(rand(0.8, 1.6)));
-      else if (r < 0.6) await step(h.wait(rand(0.6, 1.4)));
-    }
-    await step(h.face(rand(-0.5, 0.5)));
+  capture() {
+    this.renderer.render(this.scene, this.camera);
+    return this.canvas.toDataURL('image/jpeg', 0.92);
   }
 
-  async wheelRun(step, dur) {
-    const h = this.ham;
-    h.look = null;
-    await this.walkTo(step, 1, WHEEL.x, WHEEL.z + WHEEL.depth / 2 + 0.25);
-    await step(h.face(Math.PI));
-    await step(h.jumpTo(WHEEL.x, WHEEL.y - WHEEL.r + 0.015, WHEEL.z, 0.45));
-    this.inWheel = true;
-    await step(h.face(Math.PI / 2));
-    await step(h.wait(dur, (t) => (h.runK = Math.min(1, t * 1.5))));
-    h.runK = 0;
-    await step(h.wait(0.6));
-    await this.exitWheel(step);
-  }
-  async exitWheel(step) {
-    this.ham.runK = 0;
-    await step(this.ham.face(0));
-    await step(this.ham.jumpTo(WHEEL.x, 0, WHEEL.z + WHEEL.depth / 2 + 0.25, 0.4));
-    this.inWheel = false;
-  }
-
-  async sandBath(step, dur = 4) {
-    const h = this.ham;
-    h.look = null;
-    await this.goLevel(step, 1);
-    // 從最靠近的那一側進沙盆
-    const dx = h.root.position.x - SAND.x;
-    const dz = h.root.position.z - SAND.z;
-    const d = Math.hypot(dx, dz) || 1;
-    const ex = SAND.x + (dx / d) * (SAND.r + 0.2);
-    const ez = clamp(SAND.z + (dz / d) * (SAND.r + 0.2), -0.6, W.z - 0.12);
-    await this.walk(step, ex, ez);
-    await step(h.faceTowards(SAND.x, SAND.z));
-    await step(h.jumpTo(SAND.x, 0.085, SAND.z, 0.45));
-    this.inSand = true;
-    await step(h.sniff(0.8));
-    this.emitSand = 1;
-    await step(h.bathe(dur));
-    this.emitSand = 0;
-    await step(h.groomFor(1.2));
-    await this.exitSand(step);
-    await step(h.hops(2)); // 抖抖身上的沙
-  }
-  async exitSand(step) {
-    this.emitSand = 0;
-    await step(this.ham.face(0));
-    await step(this.ham.jumpTo(SAND.x, 0, SAND.z + SAND.r + 0.2, 0.45));
-    this.inSand = false;
-  }
-
-  async drinkWater(step) {
-    const h = this.ham;
-    h.look = null;
-    await this.walkTo(step, 1, DRINK.x, DRINK.z);
-    await step(h.face(-Math.PI / 2));
-    await step(h.drink(rand(2, 3.2)));
-  }
-
-  async napSeq(step, dur) {
-    const h = this.ham;
-    h.look = null;
-    await this.walkTo(step, 2, NEST.x, NEST.z, 0.6);
-    await step(h.face(0.5));
-    await step(h.groomFor(0.8));
-    h.sleeping = true;
-    await step(h.wait(dur));
-    h.sleeping = false;
-    await step(h.wait(0.6));
-    await step(h.groomFor(1));
-  }
-
-  async feedSeq(step) {
-    const h = this.ham;
-    h.look = null;
-    this.seeds.forEach((sd) => (sd.visible = true));
-    await this.goLevel(step, 1);
-    // 站在碗的後面吃，臉朝向鏡頭
-    await this.walk(step, BOWL.x - 0.04, BOWL.z - 0.3);
-    await step(h.faceTowards(BOWL.x, BOWL.z));
-    let left = this.seeds.length;
-    await step(h.eat(4, () => {
-      for (let i = 0; i < 2 && left > 0; i++) this.seeds[--left].visible = false;
-    }));
-    this.seeds.forEach((sd) => (sd.visible = false));
-    await step(h.hops(1));
-    // 真的倉鼠會把頰囊裡的食物帶回窩裡藏起來
-    if (Math.random() < 0.7) {
-      await this.walkTo(step, 2, NEST.x - 0.05, NEST.z + 0.05, 0.8);
-      await step(h.stash(1.8));
-      await step(h.hops(1));
-    }
-  }
-
-  // ---- 給 main.js 用 ----
-  feed() { this.touch(); return this.routine('user', (step) => this.feedSeq(step)); }
-  runWheel() { this.touch(); return this.routine('user', (step) => this.wheelRun(step, 6)); }
-  bath() { this.touch(); this.cool.bath = performance.now(); return this.routine('user', (step) => this.sandBath(step, 4.5)); }
-  putToSleep() { this.touch(); return this.routine('user', (step) => this.napSeq(step, 90)); }
-  wake() { this.touch(); return this.routine('user', (step) => step(this.ham.hops(1))); }
-  celebrate() {
-    if (this.userBusy) return;
-    this.routine('user', async (step) => { await step(this.ham.hops(2)); await step(this.ham.spin()); });
-  }
-  happyHop() {
-    if (this.userBusy || this.sleeping) return;
-    this.routine('auto', (step) => step(this.ham.hops(2)));
-  }
-
-  autoBehave(now) {
-    const h = this.ham;
-    const idleFor = now - this.lastInteraction;
-    const sad = h.mood === 'sad' || h.mood === 'hungry';
-    const r = Math.random();
-    const A = (fn) => this.routine('auto', fn);
-    if (idleFor > 45000 && r < (sad ? 0.5 : 0.3)) return A((step) => this.napSeq(step, rand(25, 50)));
-    if (r < (sad ? 0.05 : 0.18)) return A((step) => this.wheelRun(step, rand(4, 9)));
-    if (r < 0.28 && now - this.cool.bath > 60000) { this.cool.bath = now; return A((step) => this.sandBath(step, rand(3, 5))); }
-    if (r < 0.36 && now - this.cool.drink > 40000) { this.cool.drink = now; return A((step) => this.drinkWater(step)); }
-    if (r < 0.48) return A((step) => step(h.groomFor(rand(1.2, 2.2))));
-    if (r < 0.56) return A((step) => step(h.rest(rand(2.5, 5))));
-    if (r < 0.66) return A((step) => this.wander(step, this.level === 1 ? 2 : 1));
-    if (r < 0.72) return A((step) => step(h.sniff(1.6)));
-    return A((step) => this.wander(step));
-  }
+  setNight(on) { this.night = on; }
 
   /* ================= 每一幀 ================= */
   frame() {
     const dt = Math.min(0.05, this.clock.getDelta());
-    const now = performance.now();
-    const h = this.ham;
-    if (this.mode === 'idle' && now > this.nextAuto) this.autoBehave(now);
-    if (!h.look && this.mode === 'idle') h.look = this.lookPoint;
-    h.update(dt);
+    const now = Date.now();
+    const sim = this.sim;
+    if (sim.ready && sim.until < now + 8000) sim.advance(now + 30000);
 
-    // 滾輪（有慣性）
-    this.wheelVel = THREE.MathUtils.damp(this.wheelVel, h.runK * 6.5, h.runK > 0 ? 3 : 1, dt);
-    this.rotor.rotation.z -= this.wheelVel * dt;
+    // 白天／晚上的光
+    this.nightK = THREE.MathUtils.damp(this.nightK, this.night ? 1 : 0, 2, dt);
+    const n = this.nightK;
+    this.hemi.intensity = 1.25 - n * 0.85;
+    this.sun.intensity = 2.2 - n * 1.95;
+    this.fill.intensity = 0.45 - n * 0.2;
+    this.lamp.intensity = n * 2.2;
+    this.hemi.color.setRGB(1 - n * 0.35, 0.98 - n * 0.25, 0.95);
 
-    // 腳下的接觸陰影
-    this.contact.visible = !this.inWheel && !this.rampTo && h.bathK < 0.5;
-    this.contact.position.set(h.root.position.x, h.lift + 0.012 + (this.inSand ? 0.02 : 0), h.root.position.z);
-    this.contact.rotation.z = h.heading;
-
-    // 沙浴噴出來的沙子
-    const P = this.particles;
-    if (this.emitSand) {
-      for (let i = 0; i < 2; i++) {
-        const pt = P.find((x) => x.life <= 0);
-        if (!pt) break;
-        pt.p.set(h.root.position.x + rand(-0.12, 0.12), h.lift + 0.06, h.root.position.z + rand(-0.12, 0.12));
-        pt.v.set(rand(-0.7, 0.7), rand(0.6, 1.3), rand(-0.7, 0.7));
-        pt.life = rand(0.5, 0.9);
-        pt.s = rand(0.008, 0.016);
+    this.updateCamera();
+    let running = false;
+    const P = this.parts;
+    for (const id of sim.hamsterIds()) {
+      const pose = sim.poseAt(id, now);
+      if (!pose) continue;
+      const rig = this.rigFor(id);
+      rig.pose = pose;
+      rig.ham.look = this.camera.position;
+      rig.ham.drive(pose, dt);
+      rig.ham.update(dt);
+      if (pose.kind === 'wheelRun') running = true;
+      const onFloor = pose.kind !== 'move' ? !['wheel', 'tunnel'].includes(pose.place) && pose.kind !== 'bath' : pose.mode !== 'jump' && pose.mode !== 'climb';
+      rig.contact.visible = onFloor;
+      rig.contact.position.set(rig.ham.pos.x, rig.ham.pos.y + 0.012, rig.ham.pos.z);
+      rig.contact.rotation.z = rig.ham.heading;
+      if (pose.kind === 'bath' && Math.random() < 0.7) this.emit(rig.ham.pos, 0xe2c99a, 1, 0.07);
+      if (pose.kind === 'dig' && Math.random() < 0.6) {
+        const back = this._v.set(-Math.sin(rig.ham.heading), 0.3, -Math.cos(rig.ham.heading));
+        this.emit(rig.ham.pos, 0xf1e6d0, 1, 0.01, back.clone());
       }
     }
-    const mtx = this._m;
+    this.wheelVel = THREE.MathUtils.damp(this.wheelVel, running ? 6.5 : 0, running ? 3 : 1, dt);
+    this.rotor.rotation.z -= this.wheelVel * dt;
+
     P.forEach((pt, i) => {
       if (pt.life > 0) {
         pt.life -= dt;
         pt.v.y -= 4 * dt;
         pt.p.addScaledVector(pt.v, dt);
-        if (pt.p.y < 0.07) pt.life = 0;
+        if (pt.p.y < pt.floor) pt.life = 0;
       }
       const sc = pt.life > 0 ? pt.s : 0;
-      mtx.makeScale(sc, sc, sc).setPosition(pt.p);
-      this.sandP.setMatrixAt(i, mtx);
+      this._m.makeScale(sc, sc, sc).setPosition(pt.p);
+      this.pMesh.setMatrixAt(i, this._m);
     });
-    this.sandP.instanceMatrix.needsUpdate = true;
+    this.pMesh.instanceMatrix.needsUpdate = true;
 
-    this.updateCamera(dt);
+    this.updateFoods(now);
     this.renderer.render(this.scene, this.camera);
-    this.onFrame?.();
+    this.onFrame?.(now);
   }
 }
