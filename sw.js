@@ -1,6 +1,6 @@
 // 簡單的離線快取：先抓網路，失敗才用快取
-const CACHE = 'pup-v10';
-const SHELL = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'js/main.js', 'js/world.js', 'js/hamster.js', 'js/sim.js', 'js/layout.js', 'js/shop.js', 'js/state.js', 'js/sync.js', 'js/config.js', 'icons/icon-192.png'];
+const CACHE = 'pup-v11';
+const SHELL = ['./', 'index.html', 'style.css', 'manifest.webmanifest', 'js/main.js', 'js/world.js', 'js/hamster.js', 'js/sim.js', 'js/layout.js', 'js/shop.js', 'js/audio.js', 'js/state.js', 'js/sync.js', 'js/config.js', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

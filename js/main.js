@@ -2,9 +2,10 @@ import { World } from './world.js';
 import { Sim, hash, dayAnchor, isNight, nightStartBefore, poopSchedule, DAY, NIGHT_OFF, POOP_DAYS } from './sim.js';
 import { PALETTES } from './hamster.js';
 import { makeLayout } from './layout.js';
-import { SHOP, setupOf, shopState, RARITY, CATEGORIES } from './shop.js';
+import { SHOP, setupOf, shopState, RARITY, CATEGORIES, toyNote } from './shop.js';
 import { createBackend } from './sync.js';
-import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST, scoreOf, poopPenalty, photosLeft, PHOTOS_PER_DAY } from './state.js';
+import { withDecay, moodOf, levelInfo, daysTogether, isAnniversaryDay, TOGETHER_WINDOW, hamstersOf, MAX_HAMSTERS, SNACK_COST, scoreOf, poopPenalty, photosLeft, PHOTOS_PER_DAY, hamStats, hungriest } from './state.js';
+import { initMusic, toggleMusic, musicOn } from './audio.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -107,6 +108,19 @@ function enterHome(justCreated = false) {
     if (location.search.includes('debug')) Object.assign(window, { world, sim });
     bindScene();
     bindTray();
+    bindMusic();
+    // 資訊卡變高／變矮（例如多養一隻）→ 重新算窗戶露出來的部分
+    if (window.ResizeObserver) {
+      let h = 0;
+      let tm = 0;
+      new ResizeObserver(([e]) => {
+        const nh = Math.round(e.contentRect.height);
+        if (Math.abs(nh - h) < 4) return;
+        h = nh;
+        clearTimeout(tm);
+        tm = setTimeout(() => world.placeWindow(), 150);
+      }).observe($('#hud'));
+    }
   }
   firstRoom = firstEvents = true;
   subscribe();
@@ -200,8 +214,9 @@ function onRoom(r) {
       void flash.offsetWidth;
       flash.classList.add('go');
       const newItem = ps.cage !== ns.cage ? SHOP.find((x) => x.id === ns.cage) : SHOP.find((x) => x.id === ns.items[ns.items.length - 1]);
-      if (newItem?.id === 'annex1' || newItem?.id === 'annex2') { say('有隧道！要去隔壁探險～🚇', 4); }
-      if (newItem) say(ps.cage !== ns.cage ? `哇！新家好大！🏡` : `哇！是新的${newItem.label}！`, 4);
+      if (newItem?.id === 'annex1' || newItem?.id === 'annex2') say('旁邊多了一個籠子！可是過不去…要買連接管 🚇', 5);
+      else if (newItem?.id === 'tube1' || newItem?.id === 'tube2') say('接上連接管了！要去隔壁探險～🚇', 4);
+      else if (newItem) say(ps.cage !== ns.cage ? `哇！新家好大！🏡` : `哇！是新的${newItem.label}！`, 4);
     }
     if (prev && Object.keys(prev.members).length < 2 && Object.keys(r.members).length === 2) {
       toast(`🎉 ${partner()?.name} 回家了！現在你們可以一起照顧${allNames()}`);
@@ -239,8 +254,7 @@ function render() {
   $('#dogName').textContent = allNames();
   const days = daysTogether(d.anniversary);
   $('#daysTogether').textContent = `在一起第 ${days} 天 · ${Object.values(room.members).map((m) => m.name).join(' ♥ ')}`;
-  setBar('#barFull', d.fullness);
-  setBar('#barJoy', d.joy);
+  renderHamStats();
   const lv = levelInfo(d.love);
   $('#levelText').textContent = `Lv.${lv.level} ${lv.title}`;
   $('#barLove').style.width = `${Math.round(lv.progress * 100)}%`;
@@ -267,6 +281,41 @@ function renderScore() {
   $('#scoreText').textContent = `💝 好感度 ${liveScore()}`;
   $('#poopText').textContent = n ? `💩 ×${n}` : '✨ 乾淨';
   $('#poopText').classList.toggle('dirty', n > 0);
+}
+
+// 每一隻倉鼠：🥣 飽足（越短越餓）、💗 開心
+function renderHamStats() {
+  const st = hamStats(room);
+  const list = hams();
+  const box = $('#hamStats');
+  const key = list.map((h) => h.id + h.name + h.color).join('|');
+  if (box.dataset.key !== key) {
+    box.dataset.key = key;
+    box.innerHTML = list.map((h) => `
+      <div class="hrow" data-hid="${esc(h.id)}">
+        <span class="hname"><i class="dot" style="background:#${(PALETTES[h.color] || PALETTES.golden).fur.toString(16).padStart(6, '0')}"></i>${esc(h.name)}</span>
+        <span class="hs full" title="飢餓值（條越短越餓）">🥣<span class="bar"><i></i></span><b></b></span>
+        <span class="hs joy" title="開心值">💗<span class="bar"><i></i></span><b></b></span>
+      </div>`).join('');
+    box.querySelectorAll('.hrow').forEach((el) => el.addEventListener('click', () => { focusId = el.dataset.hid; nextChatter = 0; renderHamStats(); }));
+  }
+  box.querySelectorAll('.hrow').forEach((el) => {
+    const s = st[el.dataset.hid];
+    if (!s) return;
+    el.classList.toggle('focus', list.length > 1 && el.dataset.hid === focusId);
+    const f = Math.round(s.fullness);
+    const j = Math.round(s.joy);
+    const fi = el.querySelector('.full i');
+    const ji = el.querySelector('.joy i');
+    fi.style.width = `${Math.max(3, f)}%`;
+    ji.style.width = `${Math.max(3, j)}%`;
+    fi.classList.toggle('low', f < 25);
+    ji.classList.toggle('low', j < 25);
+    const fb = el.querySelector('.full b');
+    fb.textContent = f < 25 ? '好餓' : f;
+    fb.classList.toggle('warn', f < 25);
+    el.querySelector('.joy b').textContent = j;
+  });
 }
 
 function setBar(sel, v) {
@@ -334,6 +383,7 @@ const CHATTER = {
 };
 const KIND_TALK = {
   wheelRun: '衝呀～！🎡', bath: '沙浴好舒服～', hide: '', peek: '偷看～👀', dig: '挖挖挖…', eat: '好吃！', drink: '咕嘟咕嘟',
+  hug: '抱抱～ 💕', groomOther: '我幫你梳毛～', groomed: '好舒服喔～',
 };
 
 function positionBubble() {
@@ -346,7 +396,7 @@ function positionBubble() {
   const hidden = ['tunnel', 'house'].includes(pose?.place);
   const now = performance.now();
   const note = unreadNote();
-  const mood = moodOf(withDecay(room.dog));
+  const mood = moodOf(hamStats(room)[focusId] || withDecay(room.dog));
   let html = '';
   let cls = 'bubble';
   if (note && !hidden) {
@@ -392,6 +442,12 @@ async function sendEvent(type, extra, delay = 0) {
   const local = { id: evId, at, type, by: me(), byName: room.members[me()]?.name, ...extra };
   pending.set(evId, local);
   feedSim();
+  // 放飼料：畫面上跑去吃的那隻就是吃到的那隻（還沒人去吃就算最餓的那隻）
+  if (type === 'drop') {
+    const f = sim.ready ? sim.foods().find((x) => x.id === evId) : null;
+    extra = { ...extra, hid: f?.claimedBy || hungriest(room) };
+    local.hid = extra.hid;
+  }
   const res = await backend.act(session.code, type, { ...extra, at, evId }).catch(() => ({ ok: false }));
   if (!res?.ok) { pending.delete(evId); feedSim(); }
   return res;
@@ -480,6 +536,19 @@ function pet(id, x, y) {
   sendEvent('pet', { hid: id }, 400);
 }
 
+/* ---------------- 背景音樂 ---------------- */
+function bindMusic() {
+  const btn = $('#btnMusic');
+  const show = (on) => { btn.textContent = on ? '🎵' : '🔇'; btn.classList.toggle('off', !on); };
+  show(musicOn());
+  initMusic();
+  btn.addEventListener('click', () => {
+    const on = toggleMusic();
+    show(on);
+    toast(on ? '🎵 背景音樂開了' : '🔇 背景音樂關了');
+  });
+}
+
 /* ---------------- 拖曳飼料／零食 ---------------- */
 function bindTray() {
   const ghost = $('#dragGhost');
@@ -513,6 +582,10 @@ function bindTray() {
     ghost.classList.add('hidden');
     world.showMarker(null);
     if (!pt) return;
+    if (!makeLayout(setupOf(room)).reach[pt.level]) {
+      toast('🚇 這個籠子還沒接上連接管，倉鼠過不去喔（🛒 商店可以買）');
+      return;
+    }
     const res = await sendEvent('drop', { kind, x: pt.x, y: pt.y, z: pt.z, level: pt.level });
     if (!res?.ok && res?.reason === 'photos') toast('照片不夠換零食了 📷');
     else if (res?.ok && isNight(Date.now())) toast('牠們在睡覺，明天早上 8 點起床就會吃 🌙');
@@ -663,7 +736,9 @@ function openShop(tab = shopTab) {
   const byCost = (a, b) => (b.base ? 1 : 0) - (a.base ? 1 : 0) || a.cost - b.cost;
   const SLOT = { bedding: '🧻 墊料', cageColor: '🎨 籠子顏色', wheel: '🎡 滾輪造型', room: '🖼️ 房間主題', nest: '🛏️ 窩的造型', house: '🏠 小屋造型' };
   let groups;
-  if (tab === 'all') groups = CATEGORIES.filter((c) => c.id !== 'all').map((c) => ({ title: c.label, items: SHOP.filter((it) => it.cat === c.id && !it.base).sort(byCost) }));
+  // 籠子照「先買籠子、再買連接管」的順序排
+  const sortOf = (cat) => (cat === 'cage' ? () => 0 : byCost);
+  if (tab === 'all') groups = CATEGORIES.filter((c) => c.id !== 'all').map((c) => ({ title: c.label, items: SHOP.filter((it) => it.cat === c.id && !it.base).sort(sortOf(c.id)) }));
   else if (tab === 'style' || tab === 'home') {
     const base = SHOP.filter((it) => it.cat === tab && it.kind !== 'style').sort(byCost);
     groups = base.length ? [{ title: '✨ 設施', items: base }] : [];
@@ -671,7 +746,7 @@ function openShop(tab = shopTab) {
       const items = SHOP.filter((it) => it.cat === tab && it.slot === slot).sort(byCost);
       if (items.length) groups.push({ title: SLOT[slot], items });
     }
-  } else groups = [{ title: '', items: SHOP.filter((it) => it.cat === tab).sort(byCost) }];
+  } else groups = [{ title: '', items: SHOP.filter((it) => it.cat === tab).sort(sortOf(tab)) }];
   const card = (it) => {
     const st = shopState(it, setup);
     const rar = RARITY[it.rarity];
@@ -684,12 +759,12 @@ function openShop(tab = shopTab) {
     else foot = `<span class="tag poor">💝 ${it.cost}<small>還差 ${it.cost - pts}</small></span>`;
     return `<li class="card r-${it.rarity} s-${st.s}">
       <div class="card-top" style="background:${rar.bg}"><span class="rar" style="background:${rar.color}">${rar.label}</span><b class="emo">${it.emoji}</b></div>
-      <div class="card-body"><div class="name">${it.label}</div><div class="desc">${it.desc}</div></div>
+      <div class="card-body"><div class="name">${it.label}</div><div class="desc">${it.desc}</div>${st.s === 'ok' && toyNote(it, setup) ? `<div class="desc note">${toyNote(it, setup)}</div>` : ''}</div>
       <div class="card-foot">${foot}</div></li>`;
   };
   openSheet(`
     <h3>🛒 倉鼠商店</h3>
-    <div class="shop-top"><span>現在住：<b>${cageName}</b>${setup.items.includes('annex1') ? ' ＋遊戲籠' + (setup.items.includes('annex2') ? ' ×2' : '') : ''}</span><span class="pts">💝 <b>${pts}</b></span></div>
+    <div class="shop-top"><span>現在住：<b>${cageName}</b>${setup.items.includes('annex1') ? ' ＋遊戲籠' + (setup.items.includes('annex2') ? ' ×2' : '') : ''}${(setup.items.includes('annex1') && !setup.items.includes('tube1')) || (setup.items.includes('annex2') && !setup.items.includes('tube2')) ? '（還沒接連接管 🚇）' : ''}</span><span class="pts">💝 <b>${pts}</b></span></div>
     <div class="shop-tabs">${CATEGORIES.map((c) => `<button class="${c.id === tab ? 'on' : ''}" data-tab="${c.id}">${c.label}</button>`).join('')}</div>
     ${groups.map((g) => `${g.title ? `<div class="shop-sec">${g.title}</div>` : ''}<ul class="cards">${g.items.map(card).join('')}</ul>`).join('')}
     <p class="mode-note">✨ 越稀有、越酷炫的東西越貴：普通 → 稀有 → 史詩 → 傳說<br>摸摸、餵食、撿大便、拍照都會增加好感度。換來的東西兩個人一起用，另一支手機也會馬上看到。</p>`);

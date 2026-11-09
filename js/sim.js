@@ -6,14 +6,21 @@
 import { makeLayout } from './layout.js';
 
 // 目前籠子的配置（買了新籠子／玩具就換一組）
-let LAY, WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB, OBA1, OBA2, BOUNDS, TOILET, BOWL, P, TUN_Y, TOYS_AT, LINKS;
+let LAY, WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB, OBA1, OBA2, BOUNDS, TOILET, BOWL, P, TUN_Y, TOYS_AT, LINKS, REACH;
 export let NEST_SPOTS = [];
+// 窩裡的睡覺位置：依照總共幾隻排開，彼此不重疊
+const NEST_OFF = {
+  1: [[0, 0]],
+  2: [[-0.16, 0.02], [0.16, -0.02]],
+  3: [[-0.165, 0.095], [0.165, 0.095], [0, -0.19]],
+};
 const levelY = (lvl) => (lvl === 2 && PLAT ? PLAT.y : 0);
 const floorOf = (lvl) => 'floor' + lvl;
 export function setLayout(L) {
   LAY = L;
   ({ WHEEL, SAND, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB, OBA1, OBA2, BOUNDS, TOILET, BOWL } = L);
   LINKS = L.links;
+  REACH = L.reach || { 1: true, 2: true };
   TOYS_AT = {};
   for (const t of L.toys) TOYS_AT[t.id] = t;
   TUN_Y = LOG ? LOG.r - LOG.inner : 0;
@@ -41,8 +48,11 @@ export function setLayout(L) {
     P.houseDoor = { x: HOUSE.x, y: levelY(HOUSE.level), z: HOUSE.z + HOUSE.d / 2 + 0.2 };
     P.houseIn = { x: HOUSE.x, y: levelY(HOUSE.level), z: HOUSE.z - 0.03 };
   }
-  const k = NEST.r / 0.34;
-  NEST_SPOTS = [[-0.13, 0.04], [0.13, -0.07], [0.02, 0.15]].map(([dx, dz]) => ({ x: NEST.x + dx * k, y: levelY(NEST.level) + 0.03, z: NEST.z + dz * k }));
+  setNestSpots(1);
+}
+function setNestSpots(n) {
+  NEST_SPOTS = NEST_OFF[Math.max(1, Math.min(3, n))].map(([dx, dz]) => ({ x: NEST.x + dx, y: levelY(NEST.level) + 0.03, z: NEST.z + dz }));
+  while (NEST_SPOTS.length < 3) NEST_SPOTS.push(NEST_SPOTS[NEST_SPOTS.length - 1]);
 }
 setLayout(makeLayout());
 
@@ -85,10 +95,13 @@ export const HIDDEN_PLACES = new Set(['tunnel', 'house']);
 const ACTS = [
   ['wander', 14], ['sit', 10], ['groom', 9], ['loaf', 13], ['stand', 5], ['dig', 6], ['wheel', 10], ['sand', 5],
   ['drink', 6], ['tunnel', 8], ['logTop', 4], ['house', 6], ['nap', 6], ['otherLevel', 9],
-  ['chew', 6], ['steps', 5], ['swing', 7], ['slide', 7], ['ball', 6],
+  ['chew', 6], ['steps', 5], ['swing', 7], ['slide', 7], ['ball', 6], ['social', 4],
 ];
 const ACT_TOTAL = ACTS.reduce((s, a) => s + a[1], 0);
-const COOL = { chew: 5 * 60e3, steps: 4 * 60e3, swing: 5 * 60e3, slide: 6 * 60e3, ball: 8 * 60e3, sand: 15 * 60e3, drink: 10 * 60e3, nap: 20 * 60e3, wheel: 3 * 60e3, tunnel: 4 * 60e3, house: 6 * 60e3, logTop: 6 * 60e3, dig: 3 * 60e3 };
+const COOL = { social: 15 * 60e3, chew: 5 * 60e3, steps: 4 * 60e3, swing: 5 * 60e3, slide: 6 * 60e3, ball: 8 * 60e3, sand: 15 * 60e3, drink: 10 * 60e3, nap: 20 * 60e3, wheel: 3 * 60e3, tunnel: 4 * 60e3, house: 6 * 60e3, logTop: 6 * 60e3, dig: 3 * 60e3 };
+// 可以被找去一起玩的狀態（在地上閒閒沒事）
+const FREE_KINDS = new Set(['sit', 'groom', 'loaf', 'stand', 'sniff', 'dig']);
+const SOCIAL_KINDS = new Set(['hug', 'groomOther', 'groomed']);
 const LOCKED = new Set(['wheel', 'sand', 'drink', 'tunnel', 'logTop', 'house', 'chew', 'steps', 'swing', 'slide', 'ball']);
 const toyFront = (t) => ({ x: t.x, y: levelY(t.level), z: t.z + (t.size === 'L' ? 0.38 : 0.26) });
 export const EAT_SEC = { kibble: 8, seed: 6, fish: 9 };
@@ -335,6 +348,7 @@ export class Sim {
       this.N = A + NIGHT_OFF;
       this.next = A + DAY;
       this.hamsters = [...hamsters].sort((a, b) => a.addedAt - b.addedAt || (a.id < b.id ? -1 : 1));
+      setNestSpots(this.hamsters.length);
       this.preFoods = pre;
       this.stream = stream;
       this.reset();
@@ -536,6 +550,16 @@ export class Sim {
     }
     h.nextT = cut;
     h.intent = intent;
+    // 正在一起玩的另一隻也要停下來
+    const so = h.social;
+    h.social = null;
+    if (so && so.until > cut) {
+      const q = st.hams[so.with];
+      if (q && q.social?.with === h.id) {
+        q.social = null;
+        this.interrupt(q, cut, null);
+      }
+    }
   }
 
   onEvent(ev) {
@@ -549,6 +573,7 @@ export class Sim {
       this.addFood(ev);
       if (isNight(ev.at)) return;
       const f = st.foods[ev.id];
+      if (!REACH[f.level]) return; // 沒有連接管過不去
       let best = null;
       let bestC = Infinity;
       for (const id of st.order) {
@@ -569,7 +594,7 @@ export class Sim {
       const h = st.hams[ev.hid];
       if (!h || h.nextT === Infinity || isNight(ev.at)) return;
       const s = this.segAt(h, ev.at);
-      if (s && (s.kind === 'happy' || s.kind === 'eat' || s.kind === 'arrive')) return;
+      if (s && (s.kind === 'happy' || s.kind === 'eat' || s.kind === 'arrive' || SOCIAL_KINDS.has(s.kind))) return;
       this.interrupt(h, ev.at, { type: 'happy' });
     }
   }
@@ -597,7 +622,7 @@ export class Sim {
     let bestC = Infinity;
     for (const id in st.foods) {
       const f = st.foods[id];
-      if (f.claimedBy || f.goneAt != null || f.eatenAt != null || f.at > t) continue;
+      if (f.claimedBy || f.goneAt != null || f.eatenAt != null || f.at > t || !REACH[f.level]) continue;
       const c = d2(h.pos, f) + (h.level !== f.level ? 1.5 : 0);
       if (c < bestC || (c === bestC && f.id < best.id)) { bestC = c; best = f; }
     }
@@ -616,6 +641,9 @@ export class Sim {
     const intent = h.intent;
     h.intent = null;
     h.nextT = Infinity;
+    h.social = null;
+    h.food = null; // 上一個行程已經做完（吃完、拉完）
+    h.poop = null;
 
     if (isNight(t)) {
       p.goTo(NEST_SPOTS[h.idx % 3], NEST.level, 0.5);
@@ -700,7 +728,8 @@ export class Sim {
     let act = 'wander';
     for (const [name, w] of ACTS) { if ((pick -= w) < 0) { act = name; break; } }
     // 籠子裡沒有的玩具就不能玩
-    const avail = { wheel: !!WHEEL, sand: !!SAND, tunnel: !!LOG, logTop: !!LOG, house: !!HOUSE, otherLevel: LAY.levels.length > 1, chew: !!TOYS_AT.chew, steps: !!TOYS_AT.steps, swing: !!TOYS_AT.swing, slide: !!TOYS_AT.slide, ball: !!TOYS_AT.ball };
+    const toyOk = (id) => !!TOYS_AT[id] && !!REACH[TOYS_AT[id].level];
+    const avail = { wheel: !!WHEEL, sand: !!SAND, tunnel: !!LOG, logTop: !!LOG, house: !!HOUSE, otherLevel: LAY.levels.filter((l) => REACH[l]).length > 1, chew: toyOk('chew'), steps: toyOk('steps'), swing: toyOk('swing'), slide: toyOk('slide'), ball: toyOk('ball'), social: this.st.order.length > 1 };
     if (avail[act] === false) act = rnd(R) < 0.5 ? 'wander' : 'loaf';
     if (COOL[act] && t - (h.cool[act] ?? -1e15) < COOL[act]) act = 'wander';
     if (LOCKED.has(act) && !this.lockFree(act, t)) act = 'wander';
@@ -861,9 +890,13 @@ export class Sim {
         p.stay('shake', 1.2);
         break;
       }
+      case 'social': {
+        if (!this.planSocial(p, h, R, t)) p.stay('sit', rr(R, 4, 8));
+        break;
+      }
       case 'otherLevel':
       case 'wander': {
-        const others = LAY.levels.filter((l) => l !== h.level);
+        const others = LAY.levels.filter((l) => l !== h.level && REACH[l]);
         const lvl = act === 'otherLevel' && others.length ? others[Math.floor(rnd(R) * others.length)] : h.level;
         const n = rnd(R) < 0.7 ? 1 : 2;
         for (let i = 0; i < n; i++) {
@@ -878,6 +911,173 @@ export class Sim {
     }
     if (LOCKED.has(act)) this.lock(act, h, p.t);
     if (p.t === startT) p.stay('sit', 1);
+  }
+
+  /* ---- 倉鼠跟倉鼠：抱抱、互相理毛、追來追去 ---- */
+  socialPartner(h, t) {
+    const st = this.st;
+    if (h.place !== floorOf(h.level)) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const id of st.order) {
+      const q = st.hams[id];
+      if (q === h || q.nextT === Infinity || q.nextT <= t || q.food || q.poop || q.social || q.intent) continue;
+      if (t - (q.cool.social ?? -1e15) < COOL.social) continue;
+      const s = this.segAt(q, t);
+      if (!s) continue;
+      if (s.kind === 'move') {
+        const L = s.legs.find((l) => t < l.t1) || s.legs[s.legs.length - 1];
+        if (L.mode !== 'walk' || L.level !== h.level || L.place !== floorOf(h.level)) continue;
+      } else if (!FREE_KINDS.has(s.kind) || s.level !== h.level || s.place !== floorOf(h.level) || s.inNest) continue;
+      const d = d2(this.posAt(q, t), h.pos);
+      if (d < bestD) { bestD = d; best = q; }
+    }
+    return best;
+  }
+
+  planSocial(p, h, R, t) {
+    const q = this.socialPartner(h, t);
+    if (!q) return false;
+    const lvl = h.level;
+    const y = levelY(lvl);
+    const roll = rnd(R);
+    const type = roll < 0.38 ? 'hug' : roll < 0.72 ? 'groom' : 'chase';
+    const ok = (x, z) => inBounds(lvl, x, z) && !inObstacle(lvl, x, z, 0.03);
+    const qp = this.posAt(q, t);
+    // 先找好兩隻要站的位置，找不到就不玩
+    let spots = null;
+    let chase = null;
+    if (type === 'chase') {
+      const lead = rnd(R) < 0.5 ? 'h' : 'q';
+      const L0 = lead === 'h' ? h.pos : qp;
+      const C0 = lead === 'h' ? qp : h.pos;
+      let dx = C0.x - L0.x;
+      let dz = C0.z - L0.z;
+      const n = Math.sqrt(dx * dx + dz * dz);
+      const dirs = n > 0.05 ? [[dx / n, dz / n]] : [];
+      dirs.push([1, 0], [-1, 0], [0, 1], [0, -1]);
+      let ap = null;
+      for (const [ux, uz] of dirs) {
+        const x = L0.x + ux * 0.5;
+        const z = L0.z + uz * 0.5;
+        if (ok(x, z)) { ap = { x, y, z }; break; }
+      }
+      if (!ap) return false;
+      // 逃跑的路線
+      const pts = [];
+      let cur = { x: L0.x, z: L0.z };
+      const m = 2 + Math.floor(rnd(R) * 2);
+      for (let i = 0; i < m; i++) {
+        const sp = randomSpot(R, lvl);
+        for (const w of route(cur, sp, lvl)) pts.push({ x: w.x, y, z: w.z });
+        cur = sp;
+      }
+      chase = { lead, L0: { x: L0.x, y, z: L0.z }, ap, pts };
+    } else {
+      const left = h.pos.x <= qp.x ? 'h' : 'q';
+      const cands = [{ x: (h.pos.x + qp.x) / 2, z: (h.pos.z + qp.z) / 2 }, qp, h.pos];
+      for (let i = 0; i < 6; i++) cands.push(randomSpot(R, lvl));
+      const gap = 0.16;
+      for (const c of cands) {
+        if (ok(c.x - gap, c.z) && ok(c.x + gap, c.z)) {
+          const A = { x: c.x - gap, y, z: c.z };
+          const B = { x: c.x + gap, y, z: c.z };
+          spots = left === 'h' ? { h: A, q: B, hLeft: true } : { h: B, q: A, hLeft: false };
+          break;
+        }
+      }
+      if (!spots) return false;
+    }
+
+    // 把另一隻叫過來
+    this.interrupt(q, t, null);
+    if (q.level !== lvl || q.place !== floorOf(lvl)) return false; // 牠自己再決定要做什麼
+    const p2 = new Plan(this, q, q.nextT);
+    const P = { h: p, q: p2 };
+    const sync = (faceH, faceQ, kind = 'sniff') => {
+      p.flush(); p2.flush();
+      const m = Math.max(p.t, p2.t);
+      if (m - p.t > 30) p.stay(kind, (m - p.t) / 1000, { face: faceH });
+      if (m - p2.t > 30) p2.stay(kind, (m - p2.t) / 1000, { face: faceQ });
+      p.t = p2.t = m;
+    };
+    const both = (kindH, kindQ, sec, faceH, faceQ) => {
+      p.stay(kindH, sec, faceH == null ? {} : { face: faceH });
+      p2.stay(kindQ, sec, faceQ == null ? {} : { face: faceQ });
+    };
+
+    if (type === 'hug' || type === 'groom') {
+      // 面對面（稍微轉向鏡頭）
+      const fL = PI / 2 - 0.35;
+      const fR = -PI / 2 + 0.35;
+      const fH = spots.hLeft ? fL : fR;
+      const fQ = spots.hLeft ? fR : fL;
+      p.goTo(spots.h, lvl, 0.5);
+      p2.goTo(spots.q, lvl, 0.5);
+      sync(heading(spots.h, spots.q), heading(spots.q, spots.h));
+      both('sniff', 'sniff', 1.6, fH, fQ);
+      if (type === 'hug') {
+        both('hug', 'hug', rr(R, 4.5, 7.5), fH, fQ);
+        both('happy', 'happy', 1.6);
+        both('groom', 'groom', rr(R, 2.5, 4), fH, fQ);
+      } else {
+        // 一隻幫另一隻理毛，有時候再交換
+        const gH = rnd(R) < 0.5;
+        const turned = (left) => (left ? 0.55 : -0.55); // 被理毛的那隻轉向鏡頭，享受地閉上眼睛
+        const hLeft = spots.hLeft;
+        const sec1 = rr(R, 5, 9);
+        if (gH) both('groomOther', 'groomed', sec1, fH, turned(!hLeft));
+        else both('groomed', 'groomOther', sec1, turned(hLeft), fQ);
+        if (rnd(R) < 0.5) {
+          both('sit', 'sit', 1.2, fH, fQ);
+          const sec2 = rr(R, 4, 7);
+          if (gH) both('groomed', 'groomOther', sec2, turned(hLeft), fQ);
+          else both('groomOther', 'groomed', sec2, fH, turned(!hLeft));
+        }
+        both('sit', 'sit', rr(R, 2, 3.5), fH, fQ);
+      }
+    } else {
+      // 追來追去：先靠近，對方發現後就跑，另一隻在後面追
+      const { lead, L0, ap, pts } = chase;
+      const pl = P[lead];
+      const pc = P[lead === 'h' ? 'q' : 'h'];
+      pc.goTo(ap, lvl, 0.5);
+      if (lead === 'h') sync(heading(L0, ap), heading(ap, L0));
+      else sync(heading(ap, L0), heading(L0, ap));
+      pl.stay('stand', 0.5, { face: heading(L0, ap) });
+      const SPEED = 0.8;
+      const LAG = 0.9;
+      pc.leg(L0, 'walk', 0, floorOf(lvl), lvl, 0.5 + LAG);
+      for (const w of pts) pl.leg(w, 'walk', SPEED, floorOf(lvl), lvl);
+      // 追的那隻走一樣的路，最後停在對方後面一點
+      let prev = L0;
+      for (let i = 0; i < pts.length; i++) {
+        let w = pts[i];
+        if (i === pts.length - 1) {
+          const dx = w.x - prev.x;
+          const dz = w.z - prev.z;
+          const n = Math.sqrt(dx * dx + dz * dz);
+          if (n > 0.45) w = { x: w.x - (dx / n) * 0.36, y, z: w.z - (dz / n) * 0.36 };
+          else w = prev;
+        }
+        if (d2(pc.h.pos, w) > 0.01) pc.leg(w, 'walk', SPEED, floorOf(lvl), lvl);
+        prev = pts[i];
+      }
+      sync(heading(h.pos, q.pos), heading(q.pos, h.pos), 'sit');
+      both('sniff', 'sniff', 1.5, heading(h.pos, q.pos), heading(q.pos, h.pos));
+      both(lead === 'h' ? 'groom' : 'happy', lead === 'h' ? 'happy' : 'groom', 1.6);
+      both('sit', 'sit', rr(R, 2, 4));
+    }
+    p.flush();
+    p2.flush();
+    q.segs.push(...p2.segs);
+    q.nextT = p2.t;
+    q.intent = null;
+    h.cool.social = t;
+    q.cool.social = t;
+    h.social = { with: q.id, until: p.t, type };
+    q.social = { with: h.id, until: p2.t, type };
+    return true;
   }
 
   /* ---- 給畫面用 ---- */

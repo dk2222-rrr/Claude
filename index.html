@@ -23,25 +23,22 @@
 
     <header id="hud">
       <div class="title-row">
-        <div>
+        <div class="title-l">
           <h1 id="dogName">布丁</h1>
           <div id="daysTogether" class="sub">在一起第 1 天</div>
         </div>
         <div class="hud-btns">
+          <button id="btnMusic" class="icon-btn" aria-label="背景音樂">🎵</button>
           <button id="btnShop" class="icon-btn" aria-label="商店">🛒</button>
           <button id="btnLog" class="icon-btn" aria-label="紀錄">📒</button>
           <button id="btnSettings" class="icon-btn" aria-label="設定">⚙️</button>
         </div>
       </div>
-      <div class="stats">
-        <div class="stat"><span>🥣 飽足</span><div class="bar"><i id="barFull"></i></div></div>
-        <div class="stat"><span>💗 心情</span><div class="bar"><i id="barJoy"></i></div></div>
-      </div>
-      <div class="level">
+      <!-- 每一隻倉鼠的飢餓（飽足）和開心 -->
+      <div class="ham-stats" id="hamStats"></div>
+      <div class="meta-row">
         <span id="levelText">Lv.1 小鼠寶寶</span>
         <div class="bar small"><i id="barLove"></i></div>
-      </div>
-      <div class="score-row">
         <span id="scoreText" title="可以到商店換籠子和玩具">💝 好感度 40</span>
         <span id="poopText">✨ 乾淨</span>
       </div>

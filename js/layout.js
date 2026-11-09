@@ -140,11 +140,13 @@ export function makeLayout(setup = DEFAULT_SETUP) {
     L.annexes.push({ level: 3 + i, cx, cz: c.TUBE_Z, W: ANNEX.W, top: ANNEX.top });
     edge = cx + ANNEX.W.x;
   }
-  // 隧道：從左邊籠子的右牆到右邊籠子的左牆，中間拱起來
+  // 連接管：從左邊籠子的右牆到右邊籠子的左牆，中間拱起來（要另外買才會接上）
   L.links = [];
   if (L.RAMP) L.links.push({ type: 'ramp', a: 1, b: 2 });
   let prev = { level: 1, right: c.W.x, z: c.TUBE_Z };
   for (const ax of L.annexes) {
+    const owned = items.has(ax.level === 3 ? 'tube1' : 'tube2');
+    if (!owned) { prev = { level: ax.level, right: ax.cx + ax.W.x, z: ax.cz }; continue; }
     const x0 = prev.right;
     const x1 = ax.cx - ax.W.x;
     const z = ax.cz;
@@ -155,6 +157,14 @@ export function makeLayout(setup = DEFAULT_SETUP) {
       path: [{ x: x0 + 0.02, y: 0.1, z }, { x: mid, y: 0.42, z }, { x: x1 - 0.02, y: 0.1, z }],
     });
     prev = { level: ax.level, right: ax.cx + ax.W.x, z };
+  }
+  // 倉鼠走得到的樓層（從主籠子出發，沿著木梯和連接管）
+  L.reach = { 1: true };
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const lk of L.links) {
+      if (L.reach[lk.a] !== L.reach[lk.b]) { L.reach[lk.a] = L.reach[lk.b] = true; changed = true; }
+    }
   }
 
   // 玩具放到空位上

@@ -287,9 +287,12 @@ export class Hamster {
       sliding: p.mode === 'slide',
       rolling: p.mode === 'roll',
       jumping: p.mode === 'jump',
-      handsUp: kind === 'groom' || kind === 'eat' || kind === 'stash' || kind === 'gnaw',
-      groom: kind === 'groom' || kind === 'stash',
-      nibble: kind === 'eat' || kind === 'drink' || kind === 'gnaw',
+      handsUp: kind === 'groom' || kind === 'eat' || kind === 'stash' || kind === 'gnaw' || kind === 'groomOther',
+      groom: kind === 'groom' || kind === 'stash' || kind === 'groomOther',
+      nibble: kind === 'eat' || kind === 'drink' || kind === 'gnaw' || kind === 'groomOther',
+      hug: kind === 'hug',
+      groomOther: kind === 'groomOther',
+      groomed: kind === 'groomed',
       drinking: kind === 'drink',
       sniffing: kind === 'sniff' || kind === 'peek' || kind === 'stand',
       tall: kind === 'stand',
@@ -353,10 +356,14 @@ export class Hamster {
     this.rollG.rotation.x = -this.slope;
     const roll = this.bathK * Math.sin(t * 3.6) * 1.25;
     const wiggle = petting ? Math.sin(t * 16) * 0.06 : f.shake ? Math.sin(t * 30) * 0.12 : 0;
-    this.rollG.rotation.z = roll + wiggle;
+    // 抱抱：兩隻一起左右搖（用真實時間，兩隻才會同步）
+    this.hugK = damp(this.hugK || 0, f.hug ? 1 : 0, 5, dt);
+    this.leanK = damp(this.leanK || 0, f.hug ? 0.22 : f.groomOther ? 0.3 : f.groomed ? -0.08 : 0, 5, dt);
+    const sway = this.hugK * Math.sin((Date.now() / 1000) * 2.4) * 0.09;
+    this.rollG.rotation.z = roll + wiggle + sway;
     this.rollG.position.y = 0.3 - this.bathK * 0.08;
     const theta = (f.pooping ? -0.12 + Math.sin(t * 9) * 0.03 : 0) + q * (1.3 + sk * 0.15) - (f.drinking ? 0.25 : 0) - (f.tall ? 0.12 : 0) + (f.dig ? Math.sin(t * 18) * 0.05 : 0);
-    this.pose.rotation.x = theta;
+    this.pose.rotation.x = theta + this.leanK;
     this.pose.position.y = q * 0.07 - sk * 0.05 + Math.abs(sw) * 0.02 * this.walk + (f.tall ? 0.05 : 0);
     const tallS = f.tall ? 1.08 : 1;
     this.squeezeK = damp(this.squeezeK || 0, f.squeeze ? 1 : 0, 8, dt);
@@ -381,7 +388,11 @@ export class Hamster {
       const lp = this.root.worldToLocal(this._v.copy(this.look));
       yaw = Math.max(-0.7, Math.min(0.7, Math.atan2(lp.x, Math.max(0.3, lp.z))));
     }
-    const happyTilt = f.happy || petting ? Math.sin(t * 8) * 0.15 : 0;
+    if (f.hug || f.groomOther) yaw = 0;
+    let happyTilt = f.happy || petting ? Math.sin(t * 8) * 0.15 : 0;
+    if (f.groomed) happyTilt = 0.18 + Math.sin(t * 1.6) * 0.06; // 被理毛：歪著頭很享受
+    if (f.hug) happyTilt = 0.22;
+    if (f.groomOther) pitch = 0.4 + Math.sin(t * 9) * 0.1;
     this.headPivot.rotation.x = damp(this.headPivot.rotation.x, -theta * 0.92 + pitch, 5, dt);
     this.headPivot.rotation.y = damp(this.headPivot.rotation.y, yaw, 2.5, dt);
     this.headPivot.rotation.z = damp(this.headPivot.rotation.z, happyTilt, 5, dt);
@@ -405,6 +416,11 @@ export class Hamster {
         lerp(cz, 0.3 + step + dig * 0.05, q),
       );
       hd.rotation.x = lerp(-0.4, 0, q);
+      // 抱抱：兩手往前環抱
+      if (this.hugK > 0.01) {
+        const hk = this.hugK;
+        hd.position.set(lerp(hd.position.x, s * 0.2, hk), lerp(hd.position.y, 0.17 + Math.sin(t * 3 + s) * 0.01, hk), lerp(hd.position.z, 0.34, hk));
+      }
       holdP.add(hd.position);
     });
     this.holdPoint.position.copy(holdP.multiplyScalar(0.5)).add(this._v.set(0, 0.03, 0.05));
@@ -430,7 +446,7 @@ export class Hamster {
     if (t > this.nextBlink) { this.blinkT = 0.12; this.nextBlink = t + 2 + Math.random() * 3; }
     if (this.blinkT > 0) this.blinkT -= dt;
     let eyeY = this.blinkT > 0 ? 0.1 : 1;
-    if (petting || f.groom || f.happy || f.sliding || this.bathK > 0.5) eyeY = 0.15;
+    if (petting || f.groom || f.happy || f.sliding || f.hug || f.groomed || this.bathK > 0.5) eyeY = 0.15;
     if (f.pooping) eyeY = 0.45;
     if (sk > 0.3) eyeY = 0.1;
     this.eyes.forEach((e) => (e.scale.y = damp(e.scale.y, eyeY, 25, dt)));

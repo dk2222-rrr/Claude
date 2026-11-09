@@ -9,6 +9,8 @@ import { makeLayout } from './layout.js';
 let LAY, W, WHEEL, SAND, BOWL, DRINK, PLAT, RAMP, HOUSE, NEST, LOG, OB1, OB2, BOUNDS;
 const levelY = (lvl) => (lvl === 2 && PLAT ? PLAT.y : 0);
 import { HIDDEN_PLACES } from './sim.js';
+const ENCLOSED_R = new Set(['wheel', 'sand', 'log', 'tunnel', 'house', 'steps', 'swing', 'slideTop', 'ball', 'tube']);
+const SOCIAL_R = new Set(['hug', 'groomOther', 'groomed']);
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = THREE.MathUtils.clamp;
@@ -152,6 +154,14 @@ function skyColors(h) {
   const k = Math.min(1, Math.max(0, (h - h0) / (h1 - h0)));
   return ['#' + _ca.set(t0).lerp(_cb.set(t1), k).getHexString(), '#' + _ca.set(b0).lerp(_cb.set(b1), k).getHexString()];
 }
+// 室內的燈：白天亮、傍晚開始慢慢變暗，24:00 熄燈只剩小夜燈，早上 6 點後慢慢亮起來
+function indoorDark(now) {
+  const h = ((now / 3600e3 + 8) % 24 + 24) % 24;
+  if (h >= 7.5 && h < 16.5) return 0;
+  if (h >= 16.5) return ((h - 16.5) / 7.5) * 0.62;
+  if (h < 6) return 1;
+  return 1 - (h - 6) / 1.5;
+}
 // 月相：0 新月、0.5 滿月（以 2000-01-06 18:14 UTC 的新月為基準，週期 29.53 天）
 const moonPhase = (t) => (((t - Date.UTC(2000, 0, 6, 18, 14)) / 86400000 / 29.530588) % 1 + 1) % 1;
 
@@ -230,11 +240,12 @@ export class World {
     this.lamp = new THREE.PointLight(0xffc37a, 0, 6, 1.6); // 晚上的小夜燈
     this.lamp.position.set(1.4, 2.2, 1.2);
     s.add(this.lamp);
-    this.nightK = 0;
+    this.nightK = null;
     this.night = false;
 
     this.buildRoom();
     this.buildParticles();
+    this.buildHearts();
     this.cage = null;
 
     this.blobMat = new THREE.MeshBasicMaterial({ map: shadowBlobTex(), transparent: true, depthWrite: false });
@@ -283,6 +294,7 @@ export class World {
     if (this.desk) this.desk.position.y = W.baseBottom - 0.02;
     this.rotor = null;
     this.walls = [];
+    this.lids = [];
     this.ledMats = [];
     this.swing = null;
     this.ball = null;
@@ -319,11 +331,9 @@ export class World {
     this.decor = new THREE.Group();
     s.add(this.decor);
     // 窗戶
-    this.skyCanvas = document.createElement('canvas');
-    this.skyCanvas.width = 512;
-    this.skyCanvas.height = 320;
-    this.skyTex = new THREE.CanvasTexture(this.skyCanvas);
-    this.skyTex.colorSpace = THREE.SRGBColorSpace;
+    this.skyCanvas = null;
+    this.skyTex = null;
+    this.skyHide = 0;
     this.skyStars = Array.from({ length: 80 }, () => ({ x: Math.random(), y: Math.random() * 0.75, r: 0.6 + Math.random() * 1.4, ph: Math.random() * 6 }));
     this.skyClouds = Array.from({ length: 4 }, (_, i) => ({ x: i * 0.3 + Math.random() * 0.2, y: 0.15 + Math.random() * 0.3, s: 0.7 + Math.random() * 0.6, v: 0.004 + Math.random() * 0.006 }));
     this.win = new THREE.Group();
@@ -348,16 +358,28 @@ export class World {
       const t = (wallZ - r.origin.z) / r.direction.z;
       return r.origin.clone().addScaledVector(r.direction, t);
     };
-    // 上緣：資訊卡下面一點；下緣：籠子底盤上面（前面有鐵絲沒關係，像隔著籠子看窗外）
-    const top = hit(0, 0.36);
-    const botY = W.baseTop + 0.1;
-    let h = Math.max(0.5, top.y - botY);
-    let w = h * 1.5;
-    const maxW = Math.abs(hit(0.85, 0.3).x - hit(-0.85, 0.3).x) * 0.66;
-    if (w > maxW) { w = maxW; h = w / 1.5; }
-    let cy = top.y - h / 2;
+    // 跟真的窗戶一樣大（這個場景 1 單位 ≈ 25 公分 → 寬約 120 公分），下緣在籠子一半高左右
+    // 上面被資訊卡擋住的部分，太陽和月亮就不畫在那裡
+    const hud = document.getElementById('hud');
+    const hb = hud?.getBoundingClientRect();
+    const ch = this.canvas.clientHeight || window.innerHeight;
+    const ndcTop = hb && hb.bottom > 0 ? clamp(1 - (2 * (hb.bottom + 10)) / ch, -0.2, 0.9) : 0.36;
+    const visTop = hit(0, ndcTop).y;
+    const maxW = Math.abs(hit(0.97, 0).x - hit(-0.97, 0).x);
+    const w = Math.min(4.8, maxW);
+    const h = w * 1.15;
+    const botY = W.baseTop + Math.max(0.55, (LAY.top - W.baseTop) * 0.42);
+    const cy = botY + h / 2;
+    this.skyHide = clamp((botY + h - visTop) / h, 0, 0.62);
     const cx = this.cam.target.x;
     Object.assign(this.cam, saved);
+    // 天空的畫布跟窗戶一樣比例（不然太陽會變橢圓）
+    this.skyTex?.dispose();
+    this.skyCanvas = document.createElement('canvas');
+    this.skyCanvas.height = 512;
+    this.skyCanvas.width = Math.round((512 * w) / h);
+    this.skyTex = new THREE.CanvasTexture(this.skyCanvas);
+    this.skyTex.colorSpace = THREE.SRGBColorSpace;
     const ws = WINDOW_STYLE[this.styles?.room] || WINDOW_STYLE.cream;
     const g = this.win;
     g.position.set(cx, cy, wallZ);
@@ -366,7 +388,7 @@ export class World {
     g.add(sky);
     // 窗框＋十字窗格
     const fm = std(ws.frame, { roughness: 0.5 });
-    const ft = Math.max(0.05, w * 0.035);
+    const ft = Math.max(0.06, w * 0.03);
     g.add(mesh(new THREE.BoxGeometry(w + ft * 2, ft, 0.06), fm, 0, h / 2 + ft / 2, 0.03, { cast: false }));
     g.add(mesh(new THREE.BoxGeometry(w + ft * 2, ft, 0.06), fm, 0, -h / 2 - ft / 2, 0.03, { cast: false }));
     g.add(mesh(new THREE.BoxGeometry(ft, h, 0.06), fm, -w / 2 - ft / 2, 0, 0.03, { cast: false }));
@@ -412,10 +434,12 @@ export class World {
       if (a < 0.03) continue;
       g.fillStyle = `rgba(255,250,220,${a})`;
       g.beginPath();
-      g.arc(st.x * W2, st.y * H2, st.r, 0, 6.3);
+      g.arc(st.x * W2, st.y * H2, st.r * 1.3, 0, 6.3);
       g.fill();
     }
-    const arc = (u) => ({ x: (0.08 + u * 0.84) * W2, y: H2 * (0.82 - Math.sin(u * Math.PI) * 0.62) });
+    // 太陽、月亮走的弧線：只用窗戶露出來的那一段（上面被資訊卡擋住的不用）
+    const apex = this.skyHide + 0.07 + (1 - this.skyHide) * 0.08;
+    const arc = (u) => ({ x: (0.1 + u * 0.8) * W2, y: H2 * (0.8 - Math.sin(u * Math.PI) * (0.8 - apex)) });
     // 太陽（05:50～18:20）
     if (tw > 5.6 && tw < 18.6) {
       const u = (tw - 5.8) / 12.5;
@@ -621,6 +645,43 @@ export class World {
     wall(right, [1, 0, 0], [X + 0.02, -Z - 0.02], [X + 0.02, Z + 0.02]);
     const postMat = std(cc.bar === 'rainbow' ? 0xffffff : cc.bar, { roughness: 0.3, metalness: Math.max(0.4, cc.metal) });
     [[-X, -Z], [X, -Z]].forEach(([x, z]) => s.add(mesh(new THREE.BoxGeometry(0.035, len, 0.035), postMat, cx + x + Math.sign(x) * 0.02, T + len / 2, cz + z - 0.02)));
+    this.buildLid(cx, cz, X, Z, top, cc);
+  }
+
+  // 頂蓋：一圈框＋細鐵絲網。從上面往下看時會變淡，才看得到裡面的倉鼠
+  buildLid(cx, cz, X, Z, top, cc) {
+    const rainbow = cc.bar === 'rainbow';
+    const mat = std(rainbow ? 0xffffff : cc.bar, { roughness: cc.rough ?? 0.25, metalness: cc.metal, transparent: true, opacity: 0.9 });
+    const g = new THREE.Group();
+    const y = top + 0.01;
+    const fx = X * 2 + 0.07;
+    const fz = Z * 2 + 0.07;
+    g.add(mesh(new THREE.BoxGeometry(fx, 0.03, 0.035), mat, cx, y, cz + Z + 0.02, { cast: false }));
+    g.add(mesh(new THREE.BoxGeometry(fx, 0.03, 0.035), mat, cx, y, cz - Z - 0.02, { cast: false }));
+    g.add(mesh(new THREE.BoxGeometry(0.035, 0.03, fz), mat, cx - X - 0.02, y, cz, { cast: false }));
+    g.add(mesh(new THREE.BoxGeometry(0.035, 0.03, fz), mat, cx + X + 0.02, y, cz, { cast: false }));
+    // 前後方向的鐵絲
+    const gap = 0.15;
+    const xs = [];
+    for (let x = -X + gap; x < X - gap * 0.5; x += gap) xs.push(x);
+    const geo = new THREE.CylinderGeometry(0.006, 0.006, Z * 2 + 0.04, 4);
+    geo.rotateX(Math.PI / 2);
+    const im = new THREE.InstancedMesh(geo, mat, xs.length);
+    const m = new THREE.Matrix4();
+    const col = new THREE.Color();
+    xs.forEach((x, i) => {
+      im.setMatrixAt(i, m.makeTranslation(cx + x, y, cz));
+      if (rainbow) im.setColorAt(i, col.setHSL((i / xs.length) % 1, 0.75, 0.62));
+    });
+    g.add(im);
+    // 兩條橫的加強桿
+    [-Z / 3, Z / 3].forEach((z) => g.add(mesh(new THREE.BoxGeometry(X * 2, 0.014, 0.014), mat, cx, y + 0.004, cz + z, { cast: false })));
+    // 頂蓋上的小提把
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.012, 6, 16, Math.PI), mat);
+    handle.position.set(cx, y + 0.01, cz);
+    g.add(handle);
+    this.cage.add(g);
+    this.lids.push(mat);
   }
 
   buildWheel() {
@@ -1024,6 +1085,54 @@ export class World {
     for (let i = 0; i < this.pN; i++) this.pMesh.setColorAt(i, c);
     this.scene.add(this.pMesh);
   }
+  // 抱抱時冒出來的小愛心
+  buildHearts() {
+    const tex = canvasTex(64, 64, (g, w) => {
+      g.translate(w / 2, w / 2 + 4);
+      g.fillStyle = '#ff7aa2';
+      g.beginPath();
+      g.moveTo(0, 18);
+      g.bezierCurveTo(-30, -2, -18, -26, 0, -12);
+      g.bezierCurveTo(18, -26, 30, -2, 0, 18);
+      g.fill();
+      g.lineWidth = 3;
+      g.strokeStyle = '#c94a72';
+      g.stroke();
+      g.fillStyle = 'rgba(255,255,255,0.7)';
+      g.beginPath();
+      g.ellipse(-10, -10, 5, 3, -0.6, 0, 6.3);
+      g.fill();
+    });
+    this.hearts = Array.from({ length: 18 }, () => {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+      sp.visible = false;
+      sp.renderOrder = 5;
+      this.scene.add(sp);
+      return { sp, life: 0, max: 1, v: new THREE.Vector3(), ph: 0 };
+    });
+  }
+  emitHeart(pos) {
+    const h = this.hearts.find((x) => x.life <= 0);
+    if (!h) return;
+    h.max = h.life = rand(1.3, 1.9);
+    h.sp.position.set(pos.x + rand(-0.08, 0.08), pos.y + 0.4, pos.z + rand(-0.05, 0.05));
+    h.v.set(rand(-0.04, 0.04), rand(0.18, 0.28), 0);
+    h.ph = rand(0, 6);
+    h.sp.visible = true;
+  }
+  updateHearts(dt) {
+    for (const h of this.hearts) {
+      if (h.life <= 0) continue;
+      h.life -= dt;
+      if (h.life <= 0) { h.sp.visible = false; continue; }
+      h.sp.position.addScaledVector(h.v, dt);
+      h.sp.position.x += Math.sin(h.ph + h.life * 5) * 0.003;
+      const age = 1 - h.life / h.max;
+      h.sp.material.opacity = Math.min(1, h.life * 2) * Math.min(1, age * 6);
+      h.sp.scale.setScalar(0.06 + Math.min(1, age * 4) * 0.07);
+    }
+  }
+
   emit(pos, color, n, floor, back) {
     for (let i = 0; i < n; i++) {
       const idx = this.parts.findIndex((x) => x.life <= 0);
@@ -1177,6 +1286,21 @@ export class World {
     Object.assign(this.cam, { yaw: 0, pitch: 0.52, dist: this.fitDist() });
     const wide = this.camera.aspect > 1.2;
     this.cam.target.set(wide ? (LAY.ext.x0 + LAY.ext.x1) / 2 : LAY.annexes.length ? 0.35 : 0, LAY.top * 0.31, 0);
+    // 直的手機：籠子往下放一點（下面的空桌面不用那麼多），上面才看得到牆上的窗戶
+    if (!wide) {
+      const y0 = this.cam.target.y;
+      const edgeY = (dy) => {
+        this.cam.target.y = y0 + dy;
+        this.updateCamera();
+        this.camera.updateMatrixWorld();
+        return this._v.set(this.cam.target.x, W.baseBottom, W.z + 0.06).project(this.camera).y;
+      };
+      const want = -0.52;
+      const a0 = edgeY(0);
+      const a1 = edgeY(0.3);
+      const dy = a0 > want && Math.abs(a1 - a0) > 1e-4 ? ((want - a0) / (a1 - a0)) * 0.3 : 0;
+      this.cam.target.y = y0 + clamp(dy, 0, LAY.top * 0.45);
+    }
   }
   orbit(dx, dy) {
     this.cam.yaw = clamp(this.cam.yaw - dx * 0.006, -1.2, 1.2);
@@ -1309,6 +1433,53 @@ export class World {
 
   setNight(on) { this.night = on; }
 
+  // 倉鼠不要疊在一起：兩隻靠太近時，畫面上輕輕把牠們推開（不影響兩支手機同步的模擬）
+  separate(ids, poses) {
+    const free = (p) => p && !ENCLOSED_R.has(p.place) && !(p.kind === 'move' && p.mode !== 'walk') && p.kind !== 'bath';
+    const push = ids.map(() => ({ x: 0, z: 0 }));
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = poses[i];
+        const b = poses[j];
+        if (!free(a) || !free(b) || a.level !== b.level || Math.abs(a.pos.y - b.pos.y) > 0.15) continue;
+        if (SOCIAL_R.has(a.kind) && SOCIAL_R.has(b.kind)) continue; // 抱抱、理毛本來就要貼在一起
+        if (a.inNest && b.inNest) continue; // 窩裡的位置本來就排好了
+        let dx = b.pos.x - a.pos.x;
+        let dz = b.pos.z - a.pos.z;
+        let d = Math.hypot(dx, dz);
+        if (d < 1e-3) { dx = 1; dz = 0.3; d = Math.hypot(dx, dz); }
+        // 身體是長的：頭對尾比肩並肩要隔遠一點
+        const ux = dx / d;
+        const uz = dz / d;
+        const along = (p) => {
+          const hh = this.rigs[ids[poses.indexOf(p)]]?.ham.heading ?? p.heading ?? 0;
+          return Math.abs(Math.sin(hh) * ux + Math.cos(hh) * uz);
+        };
+        const minD = 0.35 + 0.08 * (along(a) + along(b)) / 2;
+        if (d >= minD) continue;
+        const o = (minD - d) / 2;
+        push[i].x -= ux * o; push[i].z -= uz * o;
+        push[j].x += ux * o; push[j].z += uz * o;
+      }
+    }
+    ids.forEach((id, i) => {
+      const p = poses[i];
+      const rig = this.rigs[id];
+      if (!p || !rig) return;
+      // 不用另外平滑：推開的量跟距離是連續的，倉鼠模型本身也會慢慢移過去
+      const sp = (rig.sep = push[i]);
+      if (Math.abs(sp.x) + Math.abs(sp.z) < 1e-4) return;
+      const b = BOUNDS[p.level];
+      let x = p.pos.x + sp.x;
+      let z = p.pos.z + sp.z;
+      if (b && free(p)) {
+        x = clamp(x, Math.min(p.pos.x, b.x0 - 0.06), Math.max(p.pos.x, b.x1 + 0.06));
+        z = clamp(z, Math.min(p.pos.z, b.z0 - 0.06), Math.max(p.pos.z, b.z1 + 0.06));
+      }
+      p.pos = { ...p.pos, x, z };
+    });
+  }
+
   /* ================= 每一幀 ================= */
   frame() {
     const dt = Math.min(0.05, this.clock.getDelta());
@@ -1316,14 +1487,20 @@ export class World {
     const sim = this.sim;
     if (sim.ready && sim.until < now + 8000) sim.advance(now + 30000);
 
-    // 白天／晚上的光
-    this.nightK = THREE.MathUtils.damp(this.nightK, this.night ? 1 : 0, 2, dt);
+    // 室內的燈跟著時間：傍晚變成暖暖的黃光、越晚越暗，24:00 熄燈只剩小夜燈
+    const dark = indoorDark(now);
+    if (this.nightK == null) this.nightK = dark;
+    this.nightK = THREE.MathUtils.damp(this.nightK, dark, 0.8, dt);
     const n = this.nightK;
-    this.hemi.intensity = 1.25 - n * 0.85;
-    this.sun.intensity = 2.2 - n * 1.95;
-    this.fill.intensity = 0.45 - n * 0.2;
-    this.lamp.intensity = n * 2.2;
-    this.hemi.color.setRGB(1 - n * 0.35, 0.98 - n * 0.25, 0.95);
+    const warm = ss(0, 0.45, n) * (1 - ss(0.7, 1, n));
+    const moon = ss(0.7, 1, n);
+    this.hemi.intensity = 1.25 - n * 0.9;
+    this.sun.intensity = 2.2 - n * 2.05;
+    this.fill.intensity = 0.45 - n * 0.25;
+    this.lamp.intensity = 0.6 * moon + 1.8 * warm;
+    this.hemi.color.setRGB(1 - moon * 0.38, 0.98 - warm * 0.07 - moon * 0.26, 0.95 - warm * 0.17);
+    this.sun.color.setRGB(1, 0.94 - warm * 0.1, 0.86 - warm * 0.2);
+    this.renderer.toneMappingExposure = 1.1 - n * 0.12;
 
     this.updateCamera();
     let running = false;
@@ -1331,8 +1508,12 @@ export class World {
     let ballRig = null;
     const tNow = now / 1000;
     const P = this.parts;
-    for (const id of sim.hamsterIds()) {
-      const pose = sim.poseAt(id, now);
+    const ids = sim.hamsterIds();
+    const poses = ids.map((id) => sim.poseAt(id, now));
+    this.separate(ids, poses);
+    for (let pi = 0; pi < ids.length; pi++) {
+      const id = ids[pi];
+      const pose = poses[pi];
       if (!pose) continue;
       const rig = this.rigFor(id);
       rig.pose = pose;
@@ -1340,6 +1521,8 @@ export class World {
       rig.ham.drive(pose, dt);
       rig.ham.update(dt);
       if (pose.kind === 'wheelRun') running = true;
+      if (pose.kind === 'hug' && Math.random() < dt * 2.2) this.emitHeart(rig.ham.pos);
+      if (pose.kind === 'groomed' && Math.random() < dt * 0.6) this.emitHeart(rig.ham.pos);
       // 盪鞦韆：倉鼠跟著座椅一起盪
       if (pose.kind === 'swinging' && this.swing) {
         swingOn = true;
@@ -1407,11 +1590,18 @@ export class World {
     });
     this.pMesh.instanceMatrix.needsUpdate = true;
 
+    this.updateHearts(dt);
     this.updateFoods(now);
     this.updatePoops(now);
-    if (now - this.lastSky > 1000 && this.win.children.length) { this.lastSky = now; this.drawSky(now); }
+    if (now - this.lastSky > 1000 && this.win.children.length && this.skyCanvas) { this.lastSky = now; this.drawSky(now); }
     // 轉到側面時，擋在鏡頭前的那面鐵籠變淡
     const cd = this._v.set(this.camera.position.x, 0, this.camera.position.z).normalize();
+    // 頂蓋：從越上面往下看越淡
+    const lidA = 0.9 - ss(0.62, 1.15, this.cam.pitch) * 0.7;
+    for (const m of this.lids) {
+      m.opacity += (lidA - m.opacity) * Math.min(1, dt * 8);
+      m.depthWrite = m.opacity > 0.95;
+    }
     for (const w of this.walls) {
       const facing = w.normal.dot(cd);
       const target = 1 - ss(0.2, 0.5, facing) * 0.92;

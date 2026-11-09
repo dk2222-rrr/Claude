@@ -1,5 +1,5 @@
 // 商店：用好感度換籠子、玩具、小屋和風格。越酷炫的越貴。
-import { CAGE_ORDER, toySpotsFor, TOYS, DEFAULT_STYLES } from './layout.js';
+import { CAGE_ORDER, toySpotsFor, TOYS, DEFAULT_STYLES, makeLayout } from './layout.js';
 
 export const RARITY = {
   common: { label: '普通', color: '#8f9aa6', bg: 'linear-gradient(135deg,#f4f6f8,#e6eaee)' },
@@ -21,9 +21,11 @@ export const CATEGORIES = [
 export const SHOP = [
   // 籠子與擴充
   { id: 'medium', cat: 'cage', kind: 'cage', emoji: '🏡', label: '中籠子', cost: 300, rarity: 'rare', desc: '更大的空間，可以放隧道和小木屋' },
-  { id: 'annex1', cat: 'cage', kind: 'item', emoji: '🚇', label: '擴充隧道＋遊戲籠', cost: 500, rarity: 'epic', desc: '旁邊多一個遊戲籠，用透明隧道連通，可以放更多玩具' },
   { id: 'big', cat: 'cage', kind: 'cage', emoji: '🏰', label: '雙層大籠子', cost: 700, rarity: 'epic', desc: '有二樓和木梯，倉鼠會爬上爬下' },
-  { id: 'annex2', cat: 'cage', kind: 'item', emoji: '🎠', label: '第二個遊戲籠', cost: 1000, rarity: 'legendary', needs: { item: 'annex1' }, desc: '再接一個遊戲籠，三個籠子連成一串' },
+  { id: 'annex1', cat: 'cage', kind: 'item', emoji: '🎠', label: '第二個籠子（遊戲籠）', cost: 400, rarity: 'rare', desc: '放在旁邊的遊戲籠，可以放更多玩具；要再買「連接管」倉鼠才過得去' },
+  { id: 'tube1', cat: 'cage', kind: 'item', emoji: '🚇', label: '連接管', cost: 150, rarity: 'rare', needs: { item: 'annex1' }, desc: '把主籠子和遊戲籠連起來，倉鼠會鑽過透明管子過去玩' },
+  { id: 'annex2', cat: 'cage', kind: 'item', emoji: '🏘️', label: '第三個籠子（遊戲籠）', cost: 800, rarity: 'epic', needs: { item: 'annex1' }, desc: '再放一個遊戲籠；要再買一條連接管才能接上' },
+  { id: 'tube2', cat: 'cage', kind: 'item', emoji: '🌀', label: '第二條連接管', cost: 200, rarity: 'epic', needs: { item: 'annex2' }, desc: '把第二和第三個籠子連起來，三個籠子連成一串' },
   // 玩具
   { id: 'chew', cat: 'toy', kind: 'item', emoji: '🪵', label: '啃咬木', cost: 30, rarity: 'common', needs: { spot: 'S' }, desc: '抱著木頭喀滋喀滋磨牙' },
   { id: 'sand', cat: 'toy', kind: 'item', emoji: '🛁', label: '沙浴盆', cost: 40, rarity: 'common', desc: '跳進去打滾洗澡' },
@@ -68,16 +70,23 @@ export const SHOP = [
 
 export function setupOf(room) {
   const s = room?.setup || {};
+  let items = s.items || [];
+  // 舊版的「擴充遊戲籠」本來就附連接管 → 補上
+  if (!s.tubesV2) {
+    if (items.includes('annex1') && !items.includes('tube1')) items = [...items, 'tube1'];
+    if (items.includes('annex2') && !items.includes('tube2')) items = [...items, 'tube2'];
+  }
   return {
     cage: s.cage || 'small',
-    items: s.items || [],
+    items,
+    tubesV2: true,
     cageAt: s.cageAt || 0,
     styles: { ...DEFAULT_STYLES, ...(s.styles || {}) },
     owned: s.owned || [],
   };
 }
 export const cageRank = (id) => CAGE_ORDER.indexOf(id);
-const NAME = { medium: '中籠子', big: '雙層大籠子', annex1: '擴充遊戲籠', wheel: '滾輪', house: '小木屋' };
+const NAME = { medium: '中籠子', big: '雙層大籠子', annex1: '第二個籠子', annex2: '第三個籠子', wheel: '滾輪', house: '小木屋' };
 
 // 還有幾個空位可以放 S／L 玩具
 function freeSpots(setup, size) {
@@ -102,4 +111,13 @@ export function shopState(item, setup) {
   if (item.needs?.item && !setup.items.includes(item.needs.item)) return { s: 'needs', reason: `要先有${NAME[item.needs.item]}` };
   if (item.needs?.spot && freeSpots(setup, item.needs.spot) <= 0) return { s: 'needs', reason: item.needs.spot === 'L' ? '沒有大空位了（雙層大籠子或遊戲籠才有）' : '沒有空位了，換大籠子或加遊戲籠' };
   return { s: 'ok' };
+}
+
+// 玩具會放在哪裡：放進還沒接上連接管的遊戲籠時提醒一下
+export function toyNote(item, setup) {
+  if (!TOYS[item.id] || setup.items.includes(item.id)) return '';
+  const L = makeLayout({ ...setup, items: [...setup.items, item.id] });
+  const t = L.toys.find((x) => x.id === item.id);
+  if (!t || t.level < 3) return '';
+  return L.reach[t.level] ? '會放在遊戲籠' : '⚠️ 會放在還沒接上連接管的遊戲籠，倉鼠暫時玩不到';
 }

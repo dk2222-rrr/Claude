@@ -89,6 +89,26 @@ export function hamstersOf(room) {
   return [{ id: 'h1', name: room?.dog?.name || '布丁', color: 'golden', addedAt: room?.createdAt || 0 }];
 }
 
+// 每一隻倉鼠自己的飽足（飢餓）和心情（開心）
+// 舊資料沒有 hstats 時，從整體的數值開始
+export function hamStats(room, now = Date.now()) {
+  const base = room?.hstats || {};
+  const d = room?.dog || {};
+  const out = {};
+  for (const h of hamstersOf(room)) {
+    const s = base[h.id] || { fullness: d.fullness ?? 80, joy: d.joy ?? 80, updatedAt: d.updatedAt || now };
+    out[h.id] = withDecay(s, now);
+  }
+  return out;
+}
+// 最餓的那隻（一樣餓就選先來的）
+export function hungriest(room, now = Date.now()) {
+  const st = hamStats(room, now);
+  let best = null;
+  for (const h of hamstersOf(room)) if (!best || st[h.id].fullness < st[best].fullness) best = h.id;
+  return best;
+}
+
 /**
  * 套用一個動作。回傳 { room?, event?, result }
  * room 有值才需要寫回；event 有值才寫進紀錄。
@@ -103,7 +123,15 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
     id: extra.evId || `${now}-${Math.random().toString(36).slice(2, 7)}`,
     type: t, by: uid, byName: me, at: now, ...more,
   });
-  const n = Math.max(1, hamstersOf(r).length);
+  const hs = (r.hstats = hamStats(r, now));
+  const ids = Object.keys(hs);
+  const pickHam = (hid) => (hid && hs[hid] ? hid : hungriest(r, now));
+  // 整體數值＝每隻的平均（舊版畫面和心情判斷用）
+  const syncDog = () => {
+    if (!ids.length) return;
+    d.fullness = ids.reduce((a, id) => a + hs[id].fullness, 0) / ids.length;
+    d.joy = ids.reduce((a, id) => a + hs[id].joy, 0) / ids.length;
+  };
 
   switch (type) {
     // 把飼料／零食放進籠子
@@ -112,35 +140,41 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       const cost = SNACK_COST[kind];
       if ((r.photos || 0) < cost) return { result: { ok: false, reason: 'photos' } };
       r.photos = (r.photos || 0) - cost;
-      const before = d.fullness;
-      if (kind === 'kibble') { d.fullness = clamp(d.fullness + 24 / n); d.love += 1; }
-      if (kind === 'seed') { d.fullness = clamp(d.fullness + 6 / n); d.joy = clamp(d.joy + 10); d.love += 2; }
-      if (kind === 'fish') { d.fullness = clamp(d.fullness + 10 / n); d.joy = clamp(d.joy + 18); d.love += 3; }
+      // 吃到的是哪一隻（畫面上跑去吃的那隻；沒有的話算最餓的那隻）
+      const hid = pickHam(extra.hid);
+      const h = hs[hid];
+      const before = h.fullness;
+      if (kind === 'kibble') { h.fullness = clamp(h.fullness + 24); d.love += 1; }
+      if (kind === 'seed') { h.fullness = clamp(h.fullness + 6); h.joy = clamp(h.joy + 10); d.love += 2; }
+      if (kind === 'fish') { h.fullness = clamp(h.fullness + 10); h.joy = clamp(h.joy + 18); d.love += 3; }
+      syncDog();
       // 餓的時候餵才加分（一直狂丟不會一直加）
       if (before < 85 || kind !== 'kibble') r.score = scoreOf(r) + (kind === 'kibble' ? 1 : 2);
       const { x, y, z, level } = extra;
-      return { room: r, event: ev('drop', { kind, x, y, z, level }), result: { ok: true } };
+      return { room: r, event: ev('drop', { kind, x, y, z, level, hid }), result: { ok: true, hid } };
     }
 
     case 'pet': {
       const lp = r.lastPet;
+      const h = hs[pickHam(extra.hid)];
       let together = false;
       if (lp && lp.by !== uid && now - lp.at < TOGETHER_WINDOW && !lp.used) {
         together = true;
-        d.joy = clamp(d.joy + 20);
+        for (const id of ids) hs[id].joy = clamp(hs[id].joy + 20); // 一起摸摸：每一隻都開心
         d.love += 5;
         r.combo = { at: now, names: [lp.byName, me] };
         r.score = scoreOf(r) + 2;
       }
       const prev = (r.petLog || {})[uid] || 0;
       if (now - prev > 60000) {
-        d.joy = clamp(d.joy + 5);
+        h.joy = clamp(h.joy + 6);
         d.love += 1;
         r.score = scoreOf(r) + 1; // 摸摸會慢慢增加好感度（每人每分鐘最多 1 點）
         r.petLog = { ...(r.petLog || {}), [uid]: now };
       } else {
-        d.joy = clamp(d.joy + 1);
+        h.joy = clamp(h.joy + 2);
       }
+      syncDog();
       r.lastPet = { by: uid, byName: me, at: now, used: together };
       // 每次都要寫事件：兩支手機的倉鼠要同時開心
       return { room: r, event: ev('pet', { hid: extra.hid, together, with: together ? lp.byName : null }), result: { ok: true, together } };
@@ -165,6 +199,7 @@ export function applyAction(room, type, uid, extra = {}, now = Date.now()) {
       const name = String(extra.name || '').trim().slice(0, 10) || '小倉鼠';
       const h = { id: 'h' + now.toString(36), name, color: extra.color || 'golden', addedAt: now };
       r.hamsters = [...list, h];
+      r.hstats = { ...hs, [h.id]: { fullness: 75, joy: 80, updatedAt: now } };
       d.love += 3;
       return { room: r, event: ev('adopt', { hid: h.id, name }), result: { ok: true, hamster: h } };
     }
