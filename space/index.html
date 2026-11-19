@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>太空雷達</title>
+  <meta name="description" content="火箭發射倒數與提醒、太空新聞、任務追蹤、太空站過境與天象">
+  <meta name="theme-color" content="#0a0e1a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icon.svg" alt=""><span>太空雷達</span></div>
+    <button id="refresh" class="btn small" title="立即更新">↻ 更新</button>
+  </header>
+  <div id="status" class="status"></div>
+
+  <main>
+    <!-- 發射 -->
+    <section id="tab-launches" class="tab active">
+      <div id="notifBanner"></div>
+      <div id="hero"></div>
+      <div class="seg" id="launchSeg">
+        <button data-v="up" class="on">即將發射</button>
+        <button data-v="past">最近發射</button>
+      </div>
+      <div class="chips scroll" id="launchFilter"></div>
+      <div id="launchList"></div>
+    </section>
+
+    <!-- 新聞 -->
+    <section id="tab-news" class="tab">
+      <form id="newsSearch" class="search">
+        <input id="newsQ" type="search" placeholder="搜尋新聞（英文），例如 Starship、Mars" autocomplete="off">
+        <button class="btn primary">搜尋</button>
+      </form>
+      <div class="chips scroll" id="newsFilter"></div>
+      <div id="newsList"></div>
+      <div class="center"><button id="newsMore" class="btn" hidden>載入更多</button></div>
+    </section>
+
+    <!-- 追蹤 -->
+    <section id="tab-topics" class="tab">
+      <h2>我的追蹤 <span id="topicCount" class="muted"></span></h2>
+      <p class="hint">追蹤的主題有新的發射排程或新聞時會通知你；相關的發射會自動加入關注（⭐），發射前提醒。</p>
+      <div id="topicList"></div>
+      <h3 class="label">加入追蹤主題</h3>
+      <div id="topicPresets" class="chips"></div>
+      <details class="card" id="customTopic">
+        <summary>＋ 自訂主題</summary>
+        <form id="topicForm" class="form">
+          <label>名稱<input name="name" required placeholder="例如：SpaceX 龍飛船"></label>
+          <label>英文關鍵字（用逗號分隔）<input name="keywords" required placeholder="例如：Dragon, Crew-12"></label>
+          <p class="hint">新聞與發射資料是英文的，所以關鍵字要用英文。含大寫字母的關鍵字會區分大小寫，全小寫則不區分。</p>
+          <button class="btn primary">加入</button>
+        </form>
+      </details>
+
+      <h2>近期太空事件</h2>
+      <p class="hint">對接、太空漫步、探測器飛掠、著陸等（發射以外的重要時刻）。</p>
+      <div id="eventList"></div>
+    </section>
+
+    <!-- 天象 -->
+    <section id="tab-sky" class="tab">
+      <div class="card locbar">
+        <div class="grow">📍 觀測地點：<b id="locName"></b><div class="meta" id="locCoord"></div></div>
+        <select id="locPreset" aria-label="選擇城市"></select>
+        <button id="useGeo" class="btn small">目前位置</button>
+      </div>
+      <div id="moonCard"></div>
+
+      <h2>太空站過境 <span class="muted">肉眼可見</span></h2>
+      <p class="hint">太空站被陽光照亮、天空又夠暗時，看起來像一顆不閃爍、快速移動的亮星。按 🔔 會在出現前 10 分鐘通知你。</p>
+      <div id="passList"></div>
+
+      <h2>今晚的行星</h2>
+      <div id="planetList" class="card"></div>
+
+      <h2>天象行事曆</h2>
+      <div class="chips scroll" id="skyFilter"></div>
+      <div id="skyList"></div>
+    </section>
+
+    <!-- 設定 -->
+    <section id="tab-settings" class="tab">
+      <h2>設定</h2>
+      <div class="card">
+        <h3>通知</h3>
+        <p id="notifState" class="muted"></p>
+        <div class="row">
+          <button id="enableNotif" class="btn primary">開啟通知</button>
+          <button id="testNotif" class="btn">測試通知</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>🚀 關注的發射（⭐）</h3>
+        <h4>發射前提醒</h4>
+        <div id="offsets" class="checks"></div>
+        <label class="check"><input type="checkbox" data-set="notifyChange"> 發射時間變更、確定發射時通知</label>
+        <label class="check"><input type="checkbox" data-set="notifyResult"> 發射成功／失敗／暫停時通知</label>
+        <h4>追蹤主題</h4>
+        <label class="check"><input type="checkbox" data-set="autoWatch"> 追蹤主題的發射自動加入關注</label>
+        <label class="check"><input type="checkbox" data-set="notifyNewLaunch"> 追蹤主題有新的發射排程時通知</label>
+        <label class="check"><input type="checkbox" data-set="notifyNews"> 追蹤主題有新聞時通知</label>
+      </div>
+
+      <div class="card">
+        <h3>🌌 天象</h3>
+        <label class="check"><input type="checkbox" data-set="notifySky"> 日月食、流星雨等重要天象前一天提醒</label>
+        <label class="check"><input type="checkbox" data-set="notifyIss"> 太空站明亮過境自動提醒</label>
+        <label class="inline">明亮過境的標準：最高仰角至少
+          <select data-set="issMinEl" data-num>
+            <option value="30">30°</option><option value="40">40°</option><option value="50">50°</option><option value="60">60°</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="card">
+        <h3>更新頻率（App 開著時）</h3>
+        <label class="inline">發射資料
+          <select data-set="launchEvery" data-num>
+            <option value="30">每 30 分鐘</option><option value="60">每 1 小時</option><option value="120">每 2 小時</option>
+          </select>
+        </label>
+        <label class="inline">新聞
+          <select data-set="newsEvery" data-num>
+            <option value="15">每 15 分鐘</option><option value="30">每 30 分鐘</option><option value="60">每 1 小時</option>
+          </select>
+        </label>
+        <p class="hint" id="budget"></p>
+      </div>
+
+      <div class="card">
+        <h3>備份</h3>
+        <p class="hint">追蹤主題、關注的發射和設定都只存在這台裝置的瀏覽器裡。</p>
+        <div class="row">
+          <button id="exportBtn" class="btn">匯出</button>
+          <label class="btn">匯入<input id="importFile" type="file" accept="application/json" hidden></label>
+          <button id="clearCache" class="btn danger">清除快取資料</button>
+        </div>
+      </div>
+
+      <div class="card about">
+        <h3>資料來源</h3>
+        <ul>
+          <li>發射與太空事件：<a href="https://thespacedevs.com/llapi" target="_blank" rel="noopener">Launch Library 2</a>（The Space Devs）</li>
+          <li>新聞：<a href="https://spaceflightnewsapi.net/" target="_blank" rel="noopener">Spaceflight News API</a></li>
+          <li>太空站軌道：<a href="https://celestrak.org/" target="_blank" rel="noopener">CelesTrak</a></li>
+          <li>天文計算：Astronomy Engine、satellite.js（在你的裝置上計算）</li>
+        </ul>
+        <p class="hint">天象時間為推算值，可能有幾分鐘誤差；重要天象請以各地天文台公告為準。</p>
+      </div>
+      <p class="hint" id="lastCheck"></p>
+    </section>
+  </main>
+
+  <nav class="tabs">
+    <button data-tab="launches" class="active"><span>🚀</span>發射</button>
+    <button data-tab="news"><span>📰</span>新聞<b id="newsBadge" class="badge" hidden></b></button>
+    <button data-tab="topics"><span>🎯</span>追蹤</button>
+    <button data-tab="sky"><span>🌌</span>天象</button>
+    <button data-tab="settings"><span>⚙️</span>設定</button>
+  </nav>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-bg" data-close></div>
+    <div class="sheet-panel" role="dialog" aria-modal="true">
+      <button class="sheet-close" data-close aria-label="關閉">✕</button>
+      <div id="sheetBody"></div>
+    </div>
+  </div>
+  <div id="toasts"></div>
+
+  <script src="vendor/astronomy.min.js"></script>
+  <script src="vendor/satellite.min.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/checker.js"></script>
+  <script src="js/sky.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

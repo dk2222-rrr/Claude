@@ -66,3 +66,7 @@ js/app.js             介面邏輯
 sw.js                 Service Worker：離線快取、背景同步、通知點擊
 manifest.webmanifest  PWA 設定
 ```
+
+## 同一個 repo 的其他 App
+
+- [🚀 太空雷達](space/)：火箭發射倒數與提醒、太空新聞、任務追蹤、太空站過境與天象（部署後網址加上 `/space/`）

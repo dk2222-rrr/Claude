@@ -1,0 +1,14 @@
+{
+  "name": "太空雷達",
+  "short_name": "太空雷達",
+  "description": "火箭發射倒數與提醒、太空新聞、任務追蹤、太空站過境與天象",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0a0e1a",
+  "theme_color": "#0a0e1a",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
